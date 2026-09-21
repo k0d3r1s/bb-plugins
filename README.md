@@ -49,17 +49,18 @@ On push to `master` (or a manual run), CI discovers every plugin under `plugins/
 releases only those whose sources changed since their last tag, bumps the
 version, tags `<plugin>/vX.Y.Z`, publishes to npm, and creates a GitHub Release.
 
-Control the bump per plugin with a marker in the commit subject — `[major]`,
-`[minor]`, or `[patch]`; with none, CI cuts a `prerelease` (published to npm
-under the `next` dist-tag). A manual run accepts an explicit `release_type` and
-an optional single `plugin` to restrict the release.
+The bump is inferred from commit markers, scanning every commit that touched the
+plugin since its last tag: a `[major]` or `[minor]` marker in a commit subject
+opts into that bump (the highest marker across the range wins), and any normal
+commit with no marker cuts a `patch`. `[patch]` is accepted for parity but is
+the default. A manual run accepts an explicit `release_type` (`patch`, `minor`,
+`major`, or `prerelease`) and an optional single `plugin` to restrict the
+release; `prerelease` is reachable only through such a dispatch.
 
-**A stable `latest` release requires a marker or a dispatch.** Prereleases go to
-the `next` dist-tag only, so until a plugin has had at least one
-`[patch]`/`[minor]`/`[major]` (or a `workflow_dispatch` with `release_type`)
-release, `npm install @k0d3r1s/bb-plugin-<name>` (which resolves `latest`) finds
-nothing — install a prerelease explicitly with `@next` or an exact version, or
-cut a stable release first.
+Because every changed plugin cuts at least a stable `patch`, its npm `latest`
+always resolves — `npm install @k0d3r1s/bb-plugin-<name>` works after the first
+release. A `prerelease` dispatch publishes to the `next` dist-tag instead;
+install those with `@next` or an exact version.
 
 Adding a new plugin needs no workflow edits: create `plugins/<name>/` with a
 `package.json` (name `@k0d3r1s/bb-plugin-<name>`, `publishConfig.access: public`)

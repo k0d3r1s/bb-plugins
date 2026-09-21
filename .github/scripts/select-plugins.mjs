@@ -42,7 +42,9 @@ function inferBump(id, tag) {
     const m = s.match(/\[(patch|minor|major)\]/i);
     if (m) best = Math.max(best, BUMP_RANK[m[1].toLowerCase()]);
   }
-  return best ? Object.keys(BUMP_RANK)[best - 1] : "prerelease";
+  // A normal commit cuts a patch; minor/major must be opted into with a
+  // [minor]/[major] marker. prerelease is reachable only via a manual dispatch.
+  return best ? Object.keys(BUMP_RANK)[best - 1] : "patch";
 }
 
 const pluginsDir = "plugins";
