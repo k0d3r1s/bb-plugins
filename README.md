@@ -54,6 +54,13 @@ Control the bump per plugin with a marker in the commit subject — `[major]`,
 under the `next` dist-tag). A manual run accepts an explicit `release_type` and
 an optional single `plugin` to restrict the release.
 
+**A stable `latest` release requires a marker or a dispatch.** Prereleases go to
+the `next` dist-tag only, so until a plugin has had at least one
+`[patch]`/`[minor]`/`[major]` (or a `workflow_dispatch` with `release_type`)
+release, `npm install @k0d3r1s/bb-plugin-<name>` (which resolves `latest`) finds
+nothing — install a prerelease explicitly with `@next` or an exact version, or
+cut a stable release first.
+
 Adding a new plugin needs no workflow edits: create `plugins/<name>/` with a
 `package.json` (name `@k0d3r1s/bb-plugin-<name>`, `publishConfig.access: public`)
 and a `bb` manifest, add it to `.bb/plugins.json`, and CI picks it up.
