@@ -7,10 +7,16 @@ if (matrix.length === 0) {
   process.exit(0);
 }
 
+if (!(process.env.NODE_AUTH_TOKEN ?? "").trim()) {
+  console.log(
+    "NODE_AUTH_TOKEN (NPM_TOKEN secret) is not set — skipping release. " +
+      "Add the NPM_TOKEN repository secret, then push a bump or run the workflow manually.",
+  );
+  process.exit(0);
+}
+
 const run = (cmd, args, cwd) =>
   execFileSync(cmd, args, { cwd, stdio: "inherit", env: process.env });
-const capture = (cmd, args, cwd) =>
-  execFileSync(cmd, args, { cwd, encoding: "utf8", env: process.env }).trim();
 
 const released = [];
 for (const { id, dir, bump } of matrix) {
