@@ -65,9 +65,20 @@ describe("buildReviewPrompt", () => {
       reviewMode: "auto",
       scope: baseScope,
     });
-    expect(withMerge).toMatch(/Merge the current worktree branch/);
+    expect(withMerge).toMatch(/Merge the current branch/);
     expect(withMerge).toContain("git merge --abort");
-    expect(withoutMerge).not.toMatch(/Merge the current worktree branch/);
+    expect(withoutMerge).not.toMatch(/Merge the current branch/);
+  });
+
+  it("guards the primary-checkout merge against clobbering foreign uncommitted work", () => {
+    const withMerge = buildReviewPrompt({
+      decision: { commit: true, merge: true },
+      reviewMode: "auto",
+      scope: baseScope,
+    });
+    expect(withMerge).toContain("git stash");
+    expect(withMerge).toContain("git checkout -f");
+    expect(withMerge).toMatch(/working tree was not clean/);
   });
 
   it("tells a committing turn to finish genuinely-remaining plan work without inventing any", () => {
@@ -88,7 +99,7 @@ describe("buildReviewPrompt", () => {
       scope: baseScope,
     });
     expect(text.indexOf("Do not invent work")).toBeLessThan(
-      text.indexOf("Merge the current worktree branch"),
+      text.indexOf("Merge the current branch"),
     );
   });
 

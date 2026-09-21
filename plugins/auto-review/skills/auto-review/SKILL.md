@@ -5,9 +5,10 @@ description: Control bb's automatic post-turn review, commit, and local merge �
 
 # Auto review
 
-Auto-review reviews, commits, and (in a personal worktree) locally merges the changes an
-agent made during a turn. It fires on turn end for top-level, git-branch, user coding
-threads, and attributes work only to that thread's own edits.
+Auto-review reviews, commits, and — on a personal mainline (e.g. `master`) — locally merges
+the feature branch's changes an agent made during a turn, in a worktree or the primary
+checkout alike. It fires on turn end for top-level, git-branch, user coding threads, and
+attributes work only to that thread's own edits.
 
 When it commits, the injected turn then judges — from the thread's own plan — whether the
 work is actually finished, and continues any genuinely-remaining planned work (reviewing and
@@ -39,7 +40,8 @@ All commands accept `--json`.
 
 - **Enabled** — global kill switch (default on).
 - **Merge-eligible mainlines** — comma-separated branch names treated as personal
-  mainlines a worktree branch may be merged into locally (default `master`).
+  mainlines a feature branch may be merged into locally, in a worktree or the primary
+  checkout (default `master`).
 - **Review mode** — `auto` (review-code workflow if present, else self-review), `k0d3`
   (require the k0d3 review-code workflow), or `self` (always self-review).
 
@@ -49,11 +51,12 @@ Per-project overrides and per-thread skip are stored by the plugin, not in setti
 
 | Where the thread runs | eligible mainline (e.g. `master`) | non-eligible mainline (e.g. `main`) |
 |---|---|---|
-| Worktree / feature branch | review + fixes + commit + local merge | review + fixes + commit |
-| Primary checkout, feature branch | review + fixes + commit | review + fixes, no commit |
+| Worktree, feature branch | review + fixes + commit + local merge | review + fixes + commit |
+| Worktree, on the mainline | review + fixes + commit | review + fixes + commit |
+| Primary checkout, feature branch | review + fixes + commit + local merge | review + fixes, no commit |
 | Primary checkout, on the mainline | review + fixes + commit | review + fixes, no commit |
 
-When the root mainline is non-eligible (protected, e.g. `main`), auto-review never commits in the primary checkout — on any branch checked out there — so protected-mainline work stays in a dedicated worktree. Merge is local only — auto-review never pushes.
+A feature branch merges into an eligible mainline (e.g. `master`) whether it runs in a dedicated worktree or the primary checkout. When the root mainline is non-eligible (protected, e.g. `main`), auto-review never commits in the primary checkout — on any branch checked out there — so protected-mainline work stays in a dedicated worktree. Merge is local only — auto-review never pushes.
 
 ## `reason` values in `status`
 

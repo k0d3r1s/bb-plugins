@@ -111,7 +111,7 @@ export function buildReviewPrompt(input: BuildPromptInput): string {
     );
     if (decision.merge) {
       lines.push(
-        "7. This is a personal worktree branch. Merge the current worktree branch into this repository's mainline locally — but only if the work above is actually complete, not if you paused in step 6 for a decision you still need from the user; in that case leave the branch unmerged and report what remains. Follow the repository's own merge idiom (inspect recent history with `git log`). Never push. If the merge conflicts, run `git merge --abort`, leave the tree clean, and report the conflict — do not leave a half-merged tree.",
+        "7. Merge the current branch into this repository's mainline locally — but only if the work above is actually complete, not if you paused in step 6 for a decision you still need from the user; in that case leave the branch unmerged and report what remains. This may be the shared primary checkout, not a dedicated worktree, so first run `git status`: if any uncommitted or untracked changes remain that you did not make this turn, they belong to the user or another process — do NOT merge, do NOT switch branches, and never run `git stash`, `git checkout -f`, or `git reset --hard` to force a clean tree; leave everything untouched and report that the merge was skipped because the working tree was not clean. Otherwise merge following the repository's own idiom (inspect recent history with `git log`). Never push. If the merge conflicts, run `git merge --abort`, leave the tree clean, and report the conflict — do not leave a half-merged tree.",
       );
     }
   } else {

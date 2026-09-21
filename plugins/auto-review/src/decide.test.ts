@@ -26,7 +26,7 @@ describe("decide branch policy", () => {
     ).toEqual({ commit: true, merge: false });
   });
 
-  it("primary checkout on a feature branch: commit, no merge (eligible)", () => {
+  it("primary checkout on a feature branch: commit + merge (eligible)", () => {
     expect(
       decide({
         base: "master",
@@ -34,7 +34,7 @@ describe("decide branch policy", () => {
         isDedicatedWorktree: false,
         mergeEligibleMainlines: ELIGIBLE,
       }),
-    ).toEqual({ commit: true, merge: false });
+    ).toEqual({ commit: true, merge: true });
   });
 
   it("primary checkout on a feature branch: nothing when the root is protected (non-eligible)", () => {
@@ -77,18 +77,18 @@ describe("decide branch policy", () => {
         currentBranch: "master",
         isDedicatedWorktree: true,
         mergeEligibleMainlines: ELIGIBLE,
-      }).merge,
-    ).toBe(false);
+      }),
+    ).toEqual({ commit: true, merge: false });
   });
 
-  it("never merges from a non-dedicated worktree", () => {
+  it("worktree on a non-eligible mainline branch: commit, no merge", () => {
     expect(
       decide({
-        base: "master",
-        currentBranch: "bb/feature",
-        isDedicatedWorktree: false,
+        base: "main",
+        currentBranch: "main",
+        isDedicatedWorktree: true,
         mergeEligibleMainlines: ELIGIBLE,
-      }).merge,
-    ).toBe(false);
+      }),
+    ).toEqual({ commit: true, merge: false });
   });
 });

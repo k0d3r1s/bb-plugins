@@ -72,7 +72,7 @@ export function defineAutoReviewSettings(bb: BbPluginApi) {
       type: "string",
       label: "Merge-eligible mainlines",
       description:
-        "Comma-separated branch names treated as personal mainlines a worktree branch may be merged into locally. Default: master.",
+        "Comma-separated branch names treated as personal mainlines a feature branch may be merged into locally (in a worktree or the primary checkout). Default: master.",
       default: "master",
     },
     reviewMode: {
