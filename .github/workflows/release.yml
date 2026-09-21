@@ -2,7 +2,7 @@ name: Release plugins
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     paths:
       - "plugins/**"
       - ".github/workflows/release.yml"

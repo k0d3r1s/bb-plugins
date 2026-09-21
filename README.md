@@ -45,7 +45,7 @@ harness lists them as devDependencies.
 ## Releasing
 
 Releases are automated by [`.github/workflows/release.yml`](.github/workflows/release.yml).
-On push to `main` (or a manual run), CI discovers every plugin under `plugins/`,
+On push to `master` (or a manual run), CI discovers every plugin under `plugins/`,
 releases only those whose sources changed since their last tag, bumps the
 version, tags `<plugin>/vX.Y.Z`, publishes to npm, and creates a GitHub Release.
 
