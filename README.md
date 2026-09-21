@@ -32,10 +32,15 @@ Each plugin builds standalone with the `bb` CLI (shipped in the public `bb-app`
 npm package). From a plugin directory:
 
 ```sh
-npm install --include=dev
+npm install --include=dev --legacy-peer-deps
 npm test
 bb plugin build          # downloads the build toolchain on first use
 ```
+
+`--legacy-peer-deps` sidesteps an npm arborist bug in vitest 4's optional peer
+graph. The bb plugin SDK declares its server-side deps (`better-sqlite3`,
+`cron-parser`, `hono`) as optional peers; a plugin whose tests use the SDK test
+harness lists them as devDependencies.
 
 ## Releasing
 

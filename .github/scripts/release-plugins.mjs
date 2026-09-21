@@ -15,7 +15,7 @@ const capture = (cmd, args, cwd) =>
 const released = [];
 for (const { id, dir, bump } of matrix) {
   console.log(`\n=== ${id}: ${bump} ===`);
-  run("npm", ["install", "--include=dev"], dir);
+  run("npm", ["install", "--include=dev", "--legacy-peer-deps"], dir);
   run("npm", ["run", "test"], dir);
   run("bb", ["plugin", "build"], dir);
 
