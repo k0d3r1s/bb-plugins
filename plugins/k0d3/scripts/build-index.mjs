@@ -93,6 +93,23 @@ export async function buildIndex(contentDir) {
   return { entries, categories, errors };
 }
 
+/**
+ * Generate the Tier-C essentials as native skills, copied from their content/ bodies.
+ * Removes outRoot first so a slug dropped from `essentials` leaves no stale copy behind.
+ * @param {string} contentDir
+ * @param {string} outRoot
+ * @param {readonly string[]} essentials
+ */
+export async function generateEssentials(contentDir, outRoot, essentials) {
+  await rm(outRoot, { recursive: true, force: true });
+  for (const slug of essentials) {
+    const src = path.join(contentDir, "skills", slug, "SKILL.md");
+    const dst = path.join(outRoot, slug, "SKILL.md");
+    await mkdir(path.dirname(dst), { recursive: true });
+    await cp(src, dst);
+  }
+}
+
 /** Author-time CLI: regenerate the committed content/index.json, failing loudly on any validation error. */
 async function main() {
   const contentDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "content");
@@ -106,14 +123,7 @@ async function main() {
   await writeFile(path.join(contentDir, "index.json"), `${JSON.stringify(index, null, 0)}\n`, "utf8");
 
   // Tier-C: generate the curated essentials as native skills from their content/ bodies.
-  const genRoot = path.resolve(contentDir, "..", "skills-generated");
-  await rm(genRoot, { recursive: true, force: true });
-  for (const slug of ESSENTIALS) {
-    const src = path.join(contentDir, "skills", slug, "SKILL.md");
-    const dst = path.join(genRoot, slug, "SKILL.md");
-    await mkdir(path.dirname(dst), { recursive: true });
-    await cp(src, dst);
-  }
+  await generateEssentials(contentDir, path.resolve(contentDir, "..", "skills-generated"), ESSENTIALS);
   console.log(
     `k0d3 build-index: wrote content/index.json (${entries.length} skills, ${categories.length} categories) + ${ESSENTIALS.length} native essentials`,
   );

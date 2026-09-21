@@ -11,6 +11,6 @@ export function runK0d3Cli(
   deps: {
     index: SkillIndex;
     dataRoot: string;
-    requestReview?: (instruction: string) => Promise<boolean>;
+    injectInstruction?: (instruction: string) => Promise<boolean>;
   },
 ): Promise<CliResult>;

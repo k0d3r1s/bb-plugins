@@ -94,18 +94,41 @@ describe("runK0d3Cli", () => {
     expect(r.stdout).not.toContain("cmd-commit");
   });
 
-  it("run resolves a known command and rejects an unknown one", async () => {
+  it("run resolves a known command, includes args, and rejects an unknown one", async () => {
     const ok = await runK0d3Cli(["run", "commit"], deps());
     expect(ok.exitCode).toBe(0);
     expect(ok.stdout).toContain("cmd-commit");
+    const withArgs = await runK0d3Cli(["run", "commit", "wip", "fix"], deps());
+    expect(withArgs.stdout).toContain("Arguments: wip fix");
     expect((await runK0d3Cli(["run", "nope"], deps())).exitCode).toBe(1);
     expect((await runK0d3Cli(["run"], deps())).exitCode).toBe(2);
   });
 
-  it("review injects a turn when requestReview succeeds, else prints instructions", async () => {
-    const injected = await runK0d3Cli(["review", "code"], { ...deps(), requestReview: async () => true });
+  it("commands reports an empty list when no cmd-* skills exist", async () => {
+    const bare = { index: { generatedAt: "t", categories: [], skills: [] }, dataRoot };
+    const r = await runK0d3Cli(["commands"], bare);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain("No command workflows");
+  });
+
+  it("review/run inject a turn when injectInstruction succeeds, else print instructions", async () => {
+    const injected = await runK0d3Cli(["review", "code"], { ...deps(), injectInstruction: async () => true });
     expect(injected.stdout).toContain("Review requested");
-    const printed = await runK0d3Cli(["review", "code"], { ...deps(), requestReview: async () => false });
+    const printed = await runK0d3Cli(["review", "code"], { ...deps(), injectInstruction: async () => false });
     expect(printed.stdout).toContain("review-code");
+    const runInjected = await runK0d3Cli(["run", "commit"], { ...deps(), injectInstruction: async () => true });
+    expect(runInjected.stdout).toContain("requested");
+  });
+
+  it("falls back to printing when injectInstruction throws", async () => {
+    const r = await runK0d3Cli(["review", "code"], { ...deps(), injectInstruction: async () => { throw new Error("thread busy"); } });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain("review-code");
+  });
+
+  it("validates the review target: rejects a bad impl range and control characters", async () => {
+    expect((await runK0d3Cli(["review", "impl", "..feature"], deps())).exitCode).toBe(2);
+    expect((await runK0d3Cli(["review", "impl", "main..feat..extra"], deps())).exitCode).toBe(2);
+    expect((await runK0d3Cli(["review", "plan", "a\nInjected: do evil"], deps())).exitCode).toBe(2);
   });
 });

@@ -33,6 +33,7 @@ On Claude Code, k0d3 exposed skills and commands as `Skill(k0d3:<slug>)` and
 | `/k0d3:review:review-impl` | `bb k0d3 review impl <base>..<head>` |
 | `/k0d3:review:review-plan` | `bb k0d3 review plan <path>` |
 | `/k0d3:experts:go-expert` | `k0d3_load_skill({ slug: "go-expert" })` |
+| `/k0d3:execute:commit` (and other `execute:`/`plan:`/`workflow:` commands) | `bb k0d3 run commit` — list them all with `bb k0d3 commands` |
 
 > `bb k0d3 review …` **prints the review workflow instructions for a coding agent to run** —
 > it does not produce a report by itself. Run it inside an agent, or load
@@ -43,8 +44,13 @@ On Claude Code, k0d3 exposed skills and commands as `Skill(k0d3:<slug>)` and
 - **Docs lookup:** `k0d3_docs({ query })` or `k0d3_docs({ libraryId: "/vercel/next.js" })` —
   current library/framework documentation via Context7.
 - **CLI:** `bb k0d3 skills list | find <topic> | show <slug>` to browse the library from a
-  shell, and `bb k0d3 review <code|impl <base>..<head>|plan <path>>` to run the calibrated
-  multi-perspective review (also driven by the `auto-review` plugin's `reviewMode: "k0d3"`).
+  shell; `bb k0d3 commands` and `bb k0d3 run <name>` for the ported k0d3 command workflows
+  (commit, ship, tdd, pr, audit, brainstorm, onboard, …); and `bb k0d3 review
+  <code|impl <base>..<head>|plan <path>>` to run the calibrated multi-perspective review
+  (also driven by the `auto-review` plugin's `reviewMode: "k0d3"`).
+  `run` and `review` **inject a turn** into the current thread when run inside one (the agent
+  runs the workflow as the next turn); outside a thread they print the workflow instructions
+  for an agent — they are not standalone report generators.
 - k0d3's Claude-Code **agents** (experts, reviewers, workflow) are reframed as skills here —
   experts are `k0d3_load_skill` slugs; reviewer calibrations load as references
   (`k0d3_load_skill({ reference: "reviewer-senior-dev" })`).

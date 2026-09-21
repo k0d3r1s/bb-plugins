@@ -147,11 +147,14 @@ export function buildToolSpecs(index: SkillIndex, dataRoot: string): ToolSpec[] 
 export default async function plugin(bb: BbPluginApi): Promise<void> {
   const dataRoot = resolveDataRoot(import.meta.dirname);
   const index = await loadIndex(dataRoot, (m) => bb.log.warn(m));
-  for (const spec of buildToolSpecs(index, dataRoot)) {
+
+  // Register every tool from one array, and derive the configure() tool list from the same
+  // source so the two can never drift (a stale name would reject the whole configure selection).
+  const toolSpecs = [...buildToolSpecs(index, dataRoot), buildDocsToolSpec()];
+  for (const spec of toolSpecs) {
     bb.agents.registerTool(spec);
   }
-
-  bb.agents.registerTool(buildDocsToolSpec());
+  const toolNames = toolSpecs.map((spec) => spec.name);
 
   bb.agents.contributeInstructions(
     () =>
@@ -160,34 +163,36 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
   );
 
   // Tier-C: keep all tools active; surface Tier-A always, plus the curated essentials for
-  // non-side-chat threads. configure() replaces the default selection, so tools are listed explicitly.
-  bb.agents.configure((context) => ({
-    tools: ["k0d3_find_skills", "k0d3_load_skill", "k0d3_docs"],
-    skills: selectSkills(context),
-  }));
+  // non-side-chat threads.
+  bb.agents.configure((context) => ({ tools: toolNames, skills: selectSkills(context) }));
 
   bb.cli.register({
     name: "k0d3",
     summary: "Browse the k0d3 skill library and run calibrated reviews / command workflows",
     commands: [
-      { name: "review", summary: "Run the calibrated review (injects a review turn in-thread, else prints instructions)", usage: "bb k0d3 review <code|impl <base>..<head>|plan <path>>" },
       { name: "commands", summary: "List the ported k0d3 command workflows", usage: "bb k0d3 commands" },
-      { name: "run", summary: "Print instructions to run a command workflow", usage: "bb k0d3 run <command> [args...]" },
+      { name: "run", summary: "Run a command workflow (injects a turn in-thread, else prints instructions)", usage: "bb k0d3 run <command> [args...]" },
+      { name: "review", summary: "Run the calibrated review (injects a review turn in-thread, else prints instructions)", usage: "bb k0d3 review <code|impl <base>..<head>|plan <path>>" },
       { name: "skills", summary: "Browse the skill library", usage: "bb k0d3 skills <list|find <topic>|show <slug>>" },
     ],
     run: (argv, ctx) =>
       runK0d3Cli(argv, {
         index,
         dataRoot,
-        requestReview: async (instruction) => {
+        injectInstruction: async (instruction) => {
           const threadId = ctx?.threadId;
           if (threadId === undefined || threadId === null) return false;
-          await bb.sdk.threads.send({
-            threadId,
-            mode: "auto",
-            input: [{ type: "text", text: instruction, mentions: [] }],
-          });
-          return true;
+          try {
+            await bb.sdk.threads.send({
+              threadId,
+              mode: "auto",
+              input: [{ type: "text", text: instruction, mentions: [] }],
+            });
+            return true;
+          } catch (error) {
+            bb.log.warn(`k0d3: could not inject the turn, printing instructions instead: ${error instanceof Error ? error.message : String(error)}`);
+            return false;
+          }
         },
       }),
   });

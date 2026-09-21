@@ -1,9 +1,9 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildIndex } from "./build-index.mjs";
+import { buildIndex, generateEssentials } from "./build-index.mjs";
 import { ESSENTIALS } from "../src/select-skills.mjs";
 
 let root;
@@ -95,12 +95,32 @@ describe("committed index invariant", () => {
     expect(committed.skills).toEqual(entries);
   });
 
-  it("generated essentials (Tier-C) match their content/ source bodies", async () => {
+  it("generated essentials (Tier-C) match their content/ source bodies and have no extras", async () => {
     const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
     for (const slug of ESSENTIALS) {
       const src = await readFile(path.join(root, "content", "skills", slug, "SKILL.md"), "utf8");
       const gen = await readFile(path.join(root, "skills-generated", slug, "SKILL.md"), "utf8");
       expect(gen).toBe(src);
     }
+    const generatedDirs = (await readdir(path.join(root, "skills-generated"), { withFileTypes: true }))
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name)
+      .sort();
+    expect(generatedDirs).toEqual([...ESSENTIALS].sort());
+  });
+});
+
+describe("generateEssentials", () => {
+  it("copies only the listed slugs and cleans up ones dropped from the list", async () => {
+    await skill("foo", "name: foo\ndescription: Foo");
+    await skill("bar", "name: bar\ndescription: Bar");
+    const out = path.join(root, "gen");
+
+    await generateEssentials(root, out, ["foo", "bar"]);
+    expect((await readdir(out)).sort()).toEqual(["bar", "foo"]);
+    expect(await readFile(path.join(out, "foo", "SKILL.md"), "utf8")).toContain("Foo");
+
+    await generateEssentials(root, out, ["foo"]);
+    expect(await readdir(out)).toEqual(["foo"]);
   });
 });

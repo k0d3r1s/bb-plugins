@@ -15,6 +15,12 @@ describe("selectSkills", () => {
     expect(selectSkills(undefined)).toEqual([...TIER_A, ...ESSENTIALS]);
   });
 
+  it("handles absent/null origin shapes without throwing", () => {
+    for (const ctx of [{}, { origin: null }, { origin: { kind: null } }] as const) {
+      expect(selectSkills(ctx)).toEqual([...TIER_A, ...ESSENTIALS]);
+    }
+  });
+
   it("keeps the essentials set small (locate, not autoload)", () => {
     expect(ESSENTIALS.length).toBeLessThanOrEqual(8);
   });
