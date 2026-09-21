@@ -7,6 +7,7 @@ import type { SkillIndex, SkillIndexEntry } from "./src/rank.mjs";
 import { loadSkill } from "./src/loader.mjs";
 import { runK0d3Cli } from "./src/cli.mjs";
 import { fetchDocs } from "./src/docs.mjs";
+import { selectSkills } from "./src/select-skills.mjs";
 
 /**
  * The committed `content/` tree (skill bodies, references, index.json) is the
@@ -158,13 +159,36 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
       "answering from memory, then k0d3_load_skill to read the chosen skill.",
   );
 
+  // Tier-C: keep all tools active; surface Tier-A always, plus the curated essentials for
+  // non-side-chat threads. configure() replaces the default selection, so tools are listed explicitly.
+  bb.agents.configure((context) => ({
+    tools: ["k0d3_find_skills", "k0d3_load_skill", "k0d3_docs"],
+    skills: selectSkills(context),
+  }));
+
   bb.cli.register({
     name: "k0d3",
-    summary: "Browse the k0d3 skill library; print calibrated-review instructions for an agent",
+    summary: "Browse the k0d3 skill library and run calibrated reviews / command workflows",
     commands: [
-      { name: "review", summary: "Print agent instructions to run the calibrated review (for a coding agent, not a standalone report)", usage: "bb k0d3 review <code|impl <base>..<head>|plan <path>>" },
+      { name: "review", summary: "Run the calibrated review (injects a review turn in-thread, else prints instructions)", usage: "bb k0d3 review <code|impl <base>..<head>|plan <path>>" },
+      { name: "commands", summary: "List the ported k0d3 command workflows", usage: "bb k0d3 commands" },
+      { name: "run", summary: "Print instructions to run a command workflow", usage: "bb k0d3 run <command> [args...]" },
       { name: "skills", summary: "Browse the skill library", usage: "bb k0d3 skills <list|find <topic>|show <slug>>" },
     ],
-    run: (argv) => runK0d3Cli(argv, { index, dataRoot }),
+    run: (argv, ctx) =>
+      runK0d3Cli(argv, {
+        index,
+        dataRoot,
+        requestReview: async (instruction) => {
+          const threadId = ctx?.threadId;
+          if (threadId === undefined || threadId === null) return false;
+          await bb.sdk.threads.send({
+            threadId,
+            mode: "auto",
+            input: [{ type: "text", text: instruction, mentions: [] }],
+          });
+          return true;
+        },
+      }),
   });
 }

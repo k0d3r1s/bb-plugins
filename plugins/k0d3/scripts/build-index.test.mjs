@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildIndex } from "./build-index.mjs";
+import { ESSENTIALS } from "../src/select-skills.mjs";
 
 let root;
 
@@ -92,5 +93,14 @@ describe("committed index invariant", () => {
     const committed = JSON.parse(await readFile(path.join(contentDir, "index.json"), "utf8"));
     expect(committed.categories).toEqual(categories);
     expect(committed.skills).toEqual(entries);
+  });
+
+  it("generated essentials (Tier-C) match their content/ source bodies", async () => {
+    const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+    for (const slug of ESSENTIALS) {
+      const src = await readFile(path.join(root, "content", "skills", slug, "SKILL.md"), "utf8");
+      const gen = await readFile(path.join(root, "skills-generated", slug, "SKILL.md"), "utf8");
+      expect(gen).toBe(src);
+    }
   });
 });

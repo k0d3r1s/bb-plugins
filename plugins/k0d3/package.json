@@ -14,7 +14,8 @@
     },
     "server": "./server.ts",
     "skills": [
-      "skills"
+      "skills",
+      "skills-generated"
     ]
   },
   "keywords": [
@@ -24,6 +25,7 @@
     "server.ts",
     "src",
     "skills",
+    "skills-generated",
     "content",
     "dist"
   ],

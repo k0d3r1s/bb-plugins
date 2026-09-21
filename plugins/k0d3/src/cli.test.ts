@@ -12,6 +12,7 @@ const index: SkillIndex = {
   skills: [
     { slug: "go-testing", description: "Go tests", category: "go", keywords: ["golang"], tokens: ["go", "test", "golang"] },
     { slug: "go-essentials", description: "Go basics", category: "go", keywords: [], tokens: ["go", "basic"] },
+    { slug: "cmd-commit", description: "Command — Create git commits", category: "cmd", keywords: [], tokens: ["commit"] },
   ],
 };
 const deps = () => ({ index, dataRoot });
@@ -84,5 +85,27 @@ describe("runK0d3Cli", () => {
   it("rejects unknown commands and subcommands", async () => {
     expect((await runK0d3Cli(["bogus"], deps())).exitCode).toBe(2);
     expect((await runK0d3Cli(["skills", "bogus"], deps())).exitCode).toBe(2);
+  });
+
+  it("lists command workflows without the cmd- prefix", async () => {
+    const r = await runK0d3Cli(["commands"], deps());
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain("commit:");
+    expect(r.stdout).not.toContain("cmd-commit");
+  });
+
+  it("run resolves a known command and rejects an unknown one", async () => {
+    const ok = await runK0d3Cli(["run", "commit"], deps());
+    expect(ok.exitCode).toBe(0);
+    expect(ok.stdout).toContain("cmd-commit");
+    expect((await runK0d3Cli(["run", "nope"], deps())).exitCode).toBe(1);
+    expect((await runK0d3Cli(["run"], deps())).exitCode).toBe(2);
+  });
+
+  it("review injects a turn when requestReview succeeds, else prints instructions", async () => {
+    const injected = await runK0d3Cli(["review", "code"], { ...deps(), requestReview: async () => true });
+    expect(injected.stdout).toContain("Review requested");
+    const printed = await runK0d3Cli(["review", "code"], { ...deps(), requestReview: async () => false });
+    expect(printed.stdout).toContain("review-code");
   });
 });

@@ -1,9 +1,10 @@
-import { readdir, readFile, writeFile } from "node:fs/promises";
+import { cp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import yaml from "js-yaml";
 import { tokenize } from "../src/text.mjs";
 import { SLUG_RE } from "../src/loader.mjs";
+import { ESSENTIALS } from "../src/select-skills.mjs";
 
 const MAX_DESCRIPTION = 1024;
 
@@ -103,7 +104,19 @@ async function main() {
   }
   const index = { generatedAt: new Date().toISOString(), categories, skills: entries };
   await writeFile(path.join(contentDir, "index.json"), `${JSON.stringify(index, null, 0)}\n`, "utf8");
-  console.log(`k0d3 build-index: wrote content/index.json (${entries.length} skills, ${categories.length} categories)`);
+
+  // Tier-C: generate the curated essentials as native skills from their content/ bodies.
+  const genRoot = path.resolve(contentDir, "..", "skills-generated");
+  await rm(genRoot, { recursive: true, force: true });
+  for (const slug of ESSENTIALS) {
+    const src = path.join(contentDir, "skills", slug, "SKILL.md");
+    const dst = path.join(genRoot, slug, "SKILL.md");
+    await mkdir(path.dirname(dst), { recursive: true });
+    await cp(src, dst);
+  }
+  console.log(
+    `k0d3 build-index: wrote content/index.json (${entries.length} skills, ${categories.length} categories) + ${ESSENTIALS.length} native essentials`,
+  );
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

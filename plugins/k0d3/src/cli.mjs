@@ -5,7 +5,9 @@ const REVIEW_MODES = new Set(["code", "impl", "plan"]);
 
 const USAGE = [
   "Usage: bb k0d3 <command>",
-  "  review <code | impl <base>..<head> | plan <path>>  Print agent instructions to run the calibrated review",
+  "  review <code | impl <base>..<head> | plan <path>>  Run the calibrated review (injects a turn, else prints instructions)",
+  "  commands                                           List the ported k0d3 command workflows",
+  "  run <command> [args...]                            Print instructions to run a command workflow",
   "  skills list                                        List every k0d3 skill (slug: description)",
   "  skills find <topic>                                Rank skills relevant to a topic",
   "  skills show <slug>                                 Print one skill body",
@@ -29,7 +31,7 @@ function reviewInstruction(mode, target) {
 /**
  * Dispatch a `bb k0d3 ...` invocation. Pure over its deps so it is unit-testable without bb.
  * @param {readonly string[]} argv argv with the top-level command name already stripped
- * @param {{ index: import("./rank.mjs").SkillIndex, dataRoot: string }} deps
+ * @param {{ index: import("./rank.mjs").SkillIndex, dataRoot: string, requestReview?: (instruction: string) => Promise<boolean> }} deps
  * @returns {Promise<{ exitCode: number, stdout?: string, stderr?: string }>}
  */
 export async function runK0d3Cli(argv, deps) {
@@ -42,7 +44,7 @@ export async function runK0d3Cli(argv, deps) {
   if (command === "review") {
     const [mode, target] = rest;
     if (mode === undefined || !REVIEW_MODES.has(mode)) {
-      return { exitCode: 2, stderr: `review needs a mode: code | impl <base>..<head> | plan <path>\n` };
+      return { exitCode: 2, stderr: "review needs a mode: code | impl <base>..<head> | plan <path>\n" };
     }
     if ((mode === "impl" || mode === "plan") && (target === undefined || target.length === 0)) {
       const need = mode === "impl" ? "<base>..<head>" : "<path>";
@@ -51,7 +53,34 @@ export async function runK0d3Cli(argv, deps) {
     if (mode === "impl" && !target.includes("..")) {
       return { exitCode: 2, stderr: `review impl needs a range like <base>..<head> (got '${target}')\n` };
     }
-    return { exitCode: 0, stdout: `${reviewInstruction(mode, target)}\n` };
+    const instruction = reviewInstruction(mode, target);
+    if (deps.requestReview !== undefined && (await deps.requestReview(instruction))) {
+      return { exitCode: 0, stdout: "Review requested — the coding agent will run it in this thread.\n" };
+    }
+    return { exitCode: 0, stdout: `${instruction}\n` };
+  }
+
+  if (command === "commands") {
+    const cmds = deps.index.skills
+      .filter((s) => s.slug.startsWith("cmd-"))
+      .map((s) => `${s.slug.slice(4)}: ${s.description.replace(/^Command — /, "")}`)
+      .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    if (cmds.length === 0) return { exitCode: 0, stdout: "No command workflows available.\n" };
+    return { exitCode: 0, stdout: `Run one with 'bb k0d3 run <name>':\n${cmds.join("\n")}\n` };
+  }
+
+  if (command === "run") {
+    const [name, ...args] = rest;
+    if (name === undefined) return { exitCode: 2, stderr: "run needs a command name (see 'bb k0d3 commands')\n" };
+    const slug = `cmd-${name}`;
+    if (!deps.index.skills.some((s) => s.slug === slug)) {
+      return { exitCode: 1, stderr: `Unknown command '${name}'. See 'bb k0d3 commands'.\n` };
+    }
+    const argNote = args.length > 0 ? ` Arguments: ${args.join(" ")}.` : "";
+    return {
+      exitCode: 0,
+      stdout: `Load the k0d3 command workflow with k0d3_load_skill({ slug: "${slug}" }) and follow it.${argNote}\n`,
+    };
   }
 
   if (command === "skills") {
