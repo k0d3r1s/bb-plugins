@@ -1,0 +1,54 @@
+# bb-plugins
+
+A monorepo of [bb](https://getbb.app) plugins. Each plugin is a self-contained
+package under `plugins/<name>/` with its own `package.json` and `bb` manifest.
+The root [`.bb/plugins.json`](.bb/plugins.json) collection manifest indexes them.
+
+## Plugins
+
+| Plugin | ID | npm |
+|---|---|---|
+| Auto review | `auto-review` | `@k0d3r1s/bb-plugin-auto-review` |
+
+## Install a plugin
+
+From npm (per-plugin, tracks compatible releases):
+
+```sh
+bb plugin install npm:@k0d3r1s/bb-plugin-auto-review
+```
+
+From this repo over git (select one plugin from the collection):
+
+```sh
+bb plugin install git:https://github.com/k0d3r1s/bb-plugins.git --plugin auto-review
+# or the primitive, no collection manifest needed:
+bb plugin install git:https://github.com/k0d3r1s/bb-plugins.git --subdirectory plugins/auto-review
+```
+
+## Local development
+
+Each plugin builds standalone with the `bb` CLI (shipped in the public `bb-app`
+npm package). From a plugin directory:
+
+```sh
+npm install --include=dev
+npm test
+bb plugin build          # downloads the build toolchain on first use
+```
+
+## Releasing
+
+Releases are automated by [`.github/workflows/release.yml`](.github/workflows/release.yml).
+On push to `main` (or a manual run), CI discovers every plugin under `plugins/`,
+releases only those whose sources changed since their last tag, bumps the
+version, tags `<plugin>/vX.Y.Z`, publishes to npm, and creates a GitHub Release.
+
+Control the bump per plugin with a marker in the commit subject — `[major]`,
+`[minor]`, or `[patch]`; with none, CI cuts a `prerelease` (published to npm
+under the `next` dist-tag). A manual run accepts an explicit `release_type` and
+an optional single `plugin` to restrict the release.
+
+Adding a new plugin needs no workflow edits: create `plugins/<name>/` with a
+`package.json` (name `@k0d3r1s/bb-plugin-<name>`, `publishConfig.access: public`)
+and a `bb` manifest, add it to `.bb/plugins.json`, and CI picks it up.

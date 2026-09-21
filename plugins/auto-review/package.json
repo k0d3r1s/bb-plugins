@@ -1,0 +1,39 @@
+{
+  "name": "@k0d3r1s/bb-plugin-auto-review",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Review, commit, and (in a personal worktree) locally merge the changes an agent made this turn.",
+  "engines": {
+    "bb": ">=0.0"
+  },
+  "bb": {
+    "name": "Auto review",
+    "description": "Review, commit, and (in a personal worktree) locally merge the changes an agent made this turn.",
+    "branding": {
+      "icon": "GitMerge"
+    },
+    "server": "./server.ts",
+    "skills": [
+      "skills"
+    ]
+  },
+  "keywords": [
+    "bb-plugin"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "test": "vitest run --config vitest.config.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@get-bb/plugin-sdk": "^0.4.108",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.2",
+    "vitest": "^4.1.1"
+  }
+}

@@ -1,0 +1,76 @@
+name: Release plugins
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "plugins/**"
+      - ".github/workflows/release.yml"
+      - ".github/scripts/**"
+  workflow_dispatch:
+    inputs:
+      plugin:
+        description: "Restrict the release to one plugin id (empty = every changed plugin)"
+        required: false
+        default: ""
+      release_type:
+        description: "Version bump: patch, minor, major, or prerelease (empty = infer from commit markers)"
+        required: false
+        default: ""
+
+concurrency:
+  group: release-plugins
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  discover:
+    # Pushes made by the GITHUB_TOKEN do not retrigger workflows, so the bot's own
+    # version-bump commit will not loop. This guard is a second net for PAT-based pushes,
+    # and avoids a [skip ci] marker in the commit body.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.head_commit.committer.name != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
+      any: ${{ steps.select.outputs.any }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - id: select
+        env:
+          ONLY_PLUGIN: ${{ github.event.inputs.plugin }}
+          FORCED_BUMP: ${{ github.event.inputs.release_type }}
+        run: node .github/scripts/select-plugins.mjs
+
+  release:
+    needs: discover
+    if: needs.discover.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          registry-url: "https://registry.npmjs.org"
+      - name: Configure git identity
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - name: Install bb CLI
+        run: npm install -g bb-app
+      - name: Release changed plugins
+        env:
+          MATRIX: ${{ needs.discover.outputs.matrix }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node .github/scripts/release-plugins.mjs
