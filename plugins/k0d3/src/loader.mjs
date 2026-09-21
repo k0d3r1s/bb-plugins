@@ -13,7 +13,7 @@ const FIND_HINT = "Use k0d3_find_skills to discover valid slugs.";
 const REF_HINT = "Reference names come from the skill body that cites them.";
 
 /** Codepoint-safe truncation to a UTF-8 byte budget (never splits a multi-byte char). */
-function truncateToBytes(str, maxBytes) {
+export function truncateToBytes(str, maxBytes) {
   if (Buffer.byteLength(str, "utf8") <= maxBytes) return { text: str, truncated: false };
   let bytes = 0;
   let out = "";

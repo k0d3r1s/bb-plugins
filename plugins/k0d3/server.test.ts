@@ -2,8 +2,12 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { buildToolSpecs, loadIndex, resolveDataRoot } from "./server.js";
+import { buildDocsToolSpec, buildToolSpecs, loadIndex, resolveDataRoot } from "./server.js";
 import type { SkillIndex } from "./src/rank.mjs";
+
+function fakeFetch(body: string, ok = true, status = 200) {
+  return vi.fn(async () => ({ ok, status, text: async () => body })) as unknown as typeof fetch;
+}
 
 let dataRoot: string;
 
@@ -85,6 +89,21 @@ describe("buildToolSpecs", () => {
     const load = buildToolSpecs(INDEX, dataRoot)[1]!;
     const out = await load.execute({ slug: "../../etc/passwd" });
     expect(typeof out).toBe("object");
+    expect((out as { isError?: boolean }).isError).toBe(true);
+  });
+});
+
+describe("buildDocsToolSpec", () => {
+  it("maps a successful fetch to body text", async () => {
+    const spec = buildDocsToolSpec({ fetchImpl: fakeFetch("DOC BODY") });
+    expect(spec.name).toBe("k0d3_docs");
+    const out = await spec.execute({ query: "react hooks" });
+    expect(out).toBe("DOC BODY");
+  });
+
+  it("maps a failed fetch to an error tool result", async () => {
+    const spec = buildDocsToolSpec({ fetchImpl: fakeFetch("", false, 500) });
+    const out = await spec.execute({ query: "react hooks" });
     expect((out as { isError?: boolean }).isError).toBe(true);
   });
 });

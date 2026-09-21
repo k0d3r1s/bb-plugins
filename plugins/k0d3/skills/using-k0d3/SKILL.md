@@ -6,7 +6,7 @@ description: How to use the k0d3 plugin on bb — discover skills with k0d3_find
 # Using k0d3 on bb
 
 k0d3's skill library is **located on demand, not autoloaded**. Only a few skills (this one,
-`honest-completion`) are always visible. The rest of the library (~150 skills) is reachable
+`honest-completion`) are always visible. The rest of the library (~165 skills) is reachable
 through two tools, so their descriptions never flood your context.
 
 ## The two-step discovery model
@@ -29,15 +29,27 @@ On Claude Code, k0d3 exposed skills and commands as `Skill(k0d3:<slug>)` and
 |---|---|
 | `Skill(k0d3:go-essentials)` | `k0d3_load_skill({ slug: "go-essentials" })` |
 | `Skill(k0d3:skill-discovery)` | `k0d3_find_skills({ topic: "…" })` |
-| `/k0d3:review:review-code` | `k0d3_load_skill({ slug: "code-review" })` for the review guidance |
+| `/k0d3:review:review-code` | `bb k0d3 review code` (or `k0d3_load_skill({ slug: "review-code" })`) |
+| `/k0d3:review:review-impl` | `bb k0d3 review impl <base>..<head>` |
+| `/k0d3:review:review-plan` | `bb k0d3 review plan <path>` |
+| `/k0d3:experts:go-expert` | `k0d3_load_skill({ slug: "go-expert" })` |
 
-> Note: a calibrated, multi-perspective `bb k0d3 review` command (the equivalent of
-> k0d3's Claude-Code review commands) is planned but **not yet available** in this plugin.
-> The `auto-review` plugin's `reviewMode: "k0d3"` also drives a k0d3-style review when enabled.
+> `bb k0d3 review …` **prints the review workflow instructions for a coding agent to run** —
+> it does not produce a report by itself. Run it inside an agent, or load
+> `k0d3_load_skill({ slug: "review-code" })` and follow it.
+
+## Other surfaces
+
+- **Docs lookup:** `k0d3_docs({ query })` or `k0d3_docs({ libraryId: "/vercel/next.js" })` —
+  current library/framework documentation via Context7.
+- **CLI:** `bb k0d3 skills list | find <topic> | show <slug>` to browse the library from a
+  shell, and `bb k0d3 review <code|impl <base>..<head>|plan <path>>` to run the calibrated
+  multi-perspective review (also driven by the `auto-review` plugin's `reviewMode: "k0d3"`).
+- k0d3's Claude-Code **agents** (experts, reviewers, workflow) are reframed as skills here —
+  experts are `k0d3_load_skill` slugs; reviewer calibrations load as references
+  (`k0d3_load_skill({ reference: "reviewer-senior-dev" })`).
 
 ## Notes
 
-- k0d3's Claude-Code **agents** (experts, reviewers, workflow) are reframed as skills here —
-  find them the same way (e.g. `k0d3_find_skills({ topic: "go expert" })`).
 - If `k0d3_find_skills` returns nothing, broaden the term; it also lists the domain categories
   it covers.

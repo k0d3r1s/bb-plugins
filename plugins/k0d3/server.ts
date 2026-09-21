@@ -5,6 +5,8 @@ import { z } from "zod";
 import { rankSkills } from "./src/rank.mjs";
 import type { SkillIndex, SkillIndexEntry } from "./src/rank.mjs";
 import { loadSkill } from "./src/loader.mjs";
+import { runK0d3Cli } from "./src/cli.mjs";
+import { fetchDocs } from "./src/docs.mjs";
 
 /**
  * The committed `content/` tree (skill bodies, references, index.json) is the
@@ -44,12 +46,41 @@ export async function loadIndex(dataRoot: string, warn: (message: string) => voi
   }
 }
 
+type ToolResult = string | { content: { type: "text"; text: string }[]; isError?: boolean };
+
 interface ToolSpec {
   name: string;
   description: string;
   instructions: string;
   parameters: z.ZodTypeAny;
-  execute: (args: Record<string, unknown>) => Promise<string | { content: { type: "text"; text: string }[]; isError?: boolean }>;
+  execute: (args: Record<string, unknown>, ctx?: { signal?: AbortSignal }) => Promise<ToolResult>;
+}
+
+/** The k0d3_docs tool, factored out with an injectable fetch so its ok/error mapping is unit-testable. */
+export function buildDocsToolSpec(opts: { fetchImpl?: typeof fetch } = {}): ToolSpec {
+  return {
+    name: "k0d3_docs",
+    description:
+      "Look up current library/framework documentation via Context7 (k0d3's bundled docs lookup). " +
+      "Search with `query`, or fetch a library's docs with `libraryId` (e.g. \"/vercel/next.js\").",
+    instructions: "For up-to-date library/API docs, prefer k0d3_docs over guessing from memory.",
+    parameters: z
+      .object({
+        query: z.string().min(1).max(200).optional(),
+        libraryId: z.string().min(1).max(120).optional(),
+      })
+      .refine((d) => d.query !== undefined || d.libraryId !== undefined, {
+        message: "Provide query or libraryId.",
+      }),
+    async execute(args, ctx) {
+      const { query, libraryId } = args as { query?: string; libraryId?: string };
+      const fetchOpts: { signal?: AbortSignal; fetchImpl?: typeof fetch } = {};
+      if (ctx?.signal) fetchOpts.signal = ctx.signal;
+      if (opts.fetchImpl) fetchOpts.fetchImpl = opts.fetchImpl;
+      const result = await fetchDocs({ query, libraryId }, fetchOpts);
+      return result.ok ? result.content : { content: [{ type: "text", text: result.message }], isError: true };
+    },
+  };
 }
 
 /** Build the two tool specs. Pure over (index, dataRoot) so it can be unit-tested without bb. */
@@ -118,4 +149,22 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
   for (const spec of buildToolSpecs(index, dataRoot)) {
     bb.agents.registerTool(spec);
   }
+
+  bb.agents.registerTool(buildDocsToolSpec());
+
+  bb.agents.contributeInstructions(
+    () =>
+      "k0d3 is available: call k0d3_find_skills for domain/language/tooling guidance before " +
+      "answering from memory, then k0d3_load_skill to read the chosen skill.",
+  );
+
+  bb.cli.register({
+    name: "k0d3",
+    summary: "Browse the k0d3 skill library; print calibrated-review instructions for an agent",
+    commands: [
+      { name: "review", summary: "Print agent instructions to run the calibrated review (for a coding agent, not a standalone report)", usage: "bb k0d3 review <code|impl <base>..<head>|plan <path>>" },
+      { name: "skills", summary: "Browse the skill library", usage: "bb k0d3 skills <list|find <topic>|show <slug>>" },
+    ],
+    run: (argv) => runK0d3Cli(argv, { index, dataRoot }),
+  });
 }
