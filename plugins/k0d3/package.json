@@ -1,6 +1,6 @@
 {
   "name": "@k0d3r1s/bb-plugin-k0d3",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "k0d3's skill library, locator, and calibrated review — as a provider-neutral bb plugin.",
   "engines": {
