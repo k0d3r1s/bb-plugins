@@ -1,0 +1,53 @@
+{
+  "name": "@k0d3r1s/bb-plugin-devkit",
+  "version": "0.1.1",
+  "type": "module",
+  "description": "devkit's skill library, locator, and calibrated review — as a provider-neutral bb plugin.",
+  "engines": {
+    "bb": ">=0.0"
+  },
+  "bb": {
+    "name": "devkit",
+    "description": "Locate and load devkit's skill library on demand, plus calibrated multi-perspective review.",
+    "branding": {
+      "icon": "Sparkles"
+    },
+    "server": "./server.ts",
+    "skills": [
+      "skills",
+      "skills-generated"
+    ]
+  },
+  "keywords": [
+    "bb-plugin"
+  ],
+  "files": [
+    "server.ts",
+    "src",
+    "skills",
+    "skills-generated",
+    "content",
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build:data": "node scripts/build-index.mjs",
+    "build": "node scripts/build-index.mjs && bb plugin build",
+    "prepack": "node scripts/build-index.mjs && bb plugin build",
+    "test": "vitest run --config vitest.config.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@get-bb/plugin-sdk": "^0.4.106",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.0.0",
+    "js-yaml": "^4.1.0",
+    "typescript": "^5.9.2",
+    "vitest": "^4.1.1"
+  }
+}

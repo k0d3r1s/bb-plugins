@@ -42,8 +42,8 @@ All commands accept `--json`.
 - **Merge-eligible mainlines** — comma-separated branch names treated as personal
   mainlines a feature branch may be merged into locally, in a worktree or the primary
   checkout (default `master`).
-- **Review mode** — `auto` (review-code workflow if present, else self-review), `k0d3`
-  (require the k0d3 review-code workflow), or `self` (always self-review).
+- **Review mode** — `auto` (review-code workflow if present, else self-review), `devkit`
+  (require the devkit review-code workflow), or `self` (always self-review).
 
 Per-project overrides and per-thread skip are stored by the plugin, not in settings.
 

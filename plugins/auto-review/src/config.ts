@@ -2,7 +2,7 @@ import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import type { ReviewMode } from "./prompt.js";
 
-export const REVIEW_MODES = ["auto", "k0d3", "self"] as const;
+export const REVIEW_MODES = ["auto", "devkit", "self"] as const;
 
 export const DEFAULT_MERGE_ELIGIBLE_MAINLINES = ["master"];
 
@@ -79,7 +79,7 @@ export function defineAutoReviewSettings(bb: BbPluginApi) {
       type: "select",
       label: "Review mode",
       description:
-        "auto: use a review-code workflow if present, else self-review. k0d3: require the k0d3 review-code workflow. self: always self-review.",
+        "auto: use a review-code workflow if present, else self-review. devkit: require the devkit review-code workflow. self: always self-review.",
       options: [...REVIEW_MODES],
       default: "auto",
     },

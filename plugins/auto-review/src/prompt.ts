@@ -4,7 +4,7 @@ export const AUTO_REVIEW_MARKER = "[bb auto-review]";
 export const SCOPE_PATH_ALLOW = /^[A-Za-z0-9._/@+-]+$/u;
 export const MAX_SCOPE_ENTRIES = 40;
 
-export type ReviewMode = "auto" | "k0d3" | "self";
+export type ReviewMode = "auto" | "devkit" | "self";
 
 export interface ScopeRendering {
   listed: readonly string[];
@@ -52,13 +52,13 @@ const SECRET_PATTERNS = [
 
 function reviewStep(mode: ReviewMode): string {
   switch (mode) {
-    case "k0d3":
-      return "Review the changes using the k0d3 review-code workflow (e.g. `/k0d3:review:review-code`). If that workflow is not available, STOP and report that it is missing; do not fall back to a self-review.";
+    case "devkit":
+      return "Review the changes using the devkit review-code workflow (e.g. `/devkit:review:review-code`). If that workflow is not available, STOP and report that it is missing; do not fall back to a self-review.";
     case "self":
       return "Review the changes with a focused self-review of the diff you produced this turn.";
     case "auto":
     default:
-      return "Review the changes: use your review-code workflow or command if one is available (e.g. `/k0d3:review:review-code`), otherwise do a focused self-review of the diff you produced this turn.";
+      return "Review the changes: use your review-code workflow or command if one is available (e.g. `/devkit:review:review-code`), otherwise do a focused self-review of the diff you produced this turn.";
   }
 }
 

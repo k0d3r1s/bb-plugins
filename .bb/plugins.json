@@ -4,6 +4,6 @@
   "name": "k0d3r1s-plugins",
   "plugins": [
     { "name": "auto-review", "source": "./plugins/auto-review" },
-    { "name": "k0d3", "source": "./plugins/k0d3" }
+    { "name": "devkit", "source": "./plugins/devkit" }
   ]
 }

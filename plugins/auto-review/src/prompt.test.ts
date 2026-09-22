@@ -125,13 +125,13 @@ describe("buildReviewPrompt", () => {
     expect(text).not.toMatch(/\bmain\b/);
   });
 
-  it("requires the k0d3 workflow in k0d3 mode", () => {
+  it("requires the devkit workflow in devkit mode", () => {
     const text = buildReviewPrompt({
       decision: { commit: true, merge: false },
-      reviewMode: "k0d3",
+      reviewMode: "devkit",
       scope: baseScope,
     });
-    expect(text).toContain("/k0d3:review:review-code");
+    expect(text).toContain("/devkit:review:review-code");
     expect(text).toMatch(/do not fall back to a self-review/);
   });
 });

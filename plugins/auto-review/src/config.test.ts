@@ -22,12 +22,12 @@ describe("globalDefaultsFrom", () => {
       globalDefaultsFrom({
         enabled: true,
         mergeEligibleMainlines: "master,trunk",
-        reviewMode: "k0d3",
+        reviewMode: "devkit",
       }),
     ).toEqual({
       enabled: true,
       mergeEligibleMainlines: ["master", "trunk"],
-      reviewMode: "k0d3",
+      reviewMode: "devkit",
     });
   });
 
