@@ -9,6 +9,9 @@ The root [`.bb/plugins.json`](.bb/plugins.json) collection manifest indexes them
 | Plugin | ID | npm |
 |---|---|---|
 | Auto review | `auto-review` | `@k0d3r1s/bb-plugin-auto-review` |
+| devkit | `devkit` | `@k0d3r1s/bb-plugin-devkit` |
+| Directory skills | `dir-skills` | `@k0d3r1s/bb-plugin-dir-skills` |
+| Shared Runtime | `shared-runtime` | `@k0d3r1s/bb-plugin-shared-runtime` |
 
 ## Install a plugin
 

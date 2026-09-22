@@ -4,6 +4,8 @@
   "name": "k0d3r1s-plugins",
   "plugins": [
     { "name": "auto-review", "source": "./plugins/auto-review" },
-    { "name": "devkit", "source": "./plugins/devkit" }
+    { "name": "devkit", "source": "./plugins/devkit" },
+    { "name": "dir-skills", "source": "./plugins/dir-skills" },
+    { "name": "shared-runtime", "source": "./plugins/shared-runtime" }
   ]
 }
