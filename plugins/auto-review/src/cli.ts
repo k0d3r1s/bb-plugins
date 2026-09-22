@@ -11,7 +11,14 @@ import {
   writeProjectConfig,
   type GlobalDefaults,
 } from "./config.js";
-import { LATCH_KEYS, readState, writeState } from "./state.js";
+import { removeDeferral } from "./deferrals.js";
+import {
+  DEFER_WINDOW_MS,
+  LATCH_KEYS,
+  readState,
+  withThreadLock,
+  writeState,
+} from "./state.js";
 
 type SettingsHandle = ReturnType<typeof defineAutoReviewSettings>;
 
@@ -157,7 +164,8 @@ export function registerAutoReviewCli(
       },
       {
         name: "reset",
-        summary: "Clear a wedged loop-guard latch (and skip) for one thread",
+        summary:
+          "Clear a wedged latch (and skip) for one thread — also DROPS a deferred turn's pending review",
         usage: "bb auto-review reset <thread-id> [--json]",
       },
     ],
@@ -187,27 +195,48 @@ export function registerAutoReviewCli(
           } else if (command === "unskip") {
             await writeState(bb, threadId, {}, ["skip"]);
           } else {
-            const prior = await readState(bb, threadId);
-            await writeState(bb, threadId, { phase: "idle" }, [
-              ...LATCH_KEYS,
-              "skip",
-            ]);
+            // Under the same lock the event drivers use: reset now writes both
+            // thread state and the deferral index, and an unlocked interleave
+            // with a concurrent evaluate could delete an index entry that
+            // evaluate had just written, re-stranding the thread.
+            const prior = await withThreadLock(threadId, async () => {
+              const before = await readState(bb, threadId);
+              await writeState(bb, threadId, { phase: "idle" }, [
+                ...LATCH_KEYS,
+                "skip",
+              ]);
+              await removeDeferral(bb, threadId);
+              return before;
+            });
             const payload = {
               ok: true,
               command,
               threadId,
               priorPhase: prior.phase,
               wasLatched: prior.phase !== "idle",
+              droppedDeferral: prior.phase === "deferred",
             };
-            return wantsJson
-              ? json(payload)
-              : {
-                  exitCode: 0,
-                  stdout:
-                    prior.phase === "idle"
-                      ? `reset ${threadId} (was already idle; nothing latched).\n`
-                      : `reset ${threadId} (cleared ${prior.phase} latch).\n`,
-                };
+            if (wantsJson) {
+              return json(payload);
+            }
+            if (prior.phase === "idle") {
+              return {
+                exitCode: 0,
+                stdout: `reset ${threadId} (was already idle; nothing latched).\n`,
+              };
+            }
+            if (prior.phase === "deferred") {
+              return {
+                exitCode: 0,
+                stdout:
+                  `reset ${threadId} (dropped a deferred turn).\n` +
+                  "That turn was waiting for the shared checkout to go quiet, not stuck — its review and commit will now never run.\n",
+              };
+            }
+            return {
+              exitCode: 0,
+              stdout: `reset ${threadId} (cleared ${prior.phase} latch).\n`,
+            };
           }
         } catch {
           return threadError(threadId, wantsJson);
@@ -246,6 +275,7 @@ export function registerAutoReviewCli(
           reviewMode: config.reviewMode,
           mergeEligibleMainlines: config.mergeEligibleMainlines,
           phase: state.phase,
+          deferredSince: state.deferredSince ?? null,
           lastFire,
         };
         if (wantsJson) {
@@ -255,6 +285,16 @@ export function registerAutoReviewCli(
           lastFire === null
             ? "never"
             : `${lastFire.outcome} (${lastFire.reason}) at ${new Date(lastFire.at).toISOString()}`;
+        // A parked turn is the one phase a user is likely to see and not
+        // recognise, so spell out how long it has waited and what happens next
+        // rather than printing a bare word.
+        const deferredText =
+          state.phase === "deferred" && state.deferredSince !== undefined
+            ? `deferred for: ${Math.floor((Date.now() - state.deferredSince) / 60_000)} min ` +
+              `(of ${Math.floor(DEFER_WINDOW_MS / 60_000)}) — waiting for another thread to finish in this checkout.\n` +
+              "  It fires automatically once the checkout is quiet, or as a review that skips the merge after the window.\n" +
+              `  To drop it instead: bb auto-review reset ${threadId}\n`
+            : "";
         return {
           exitCode: 0,
           stdout:
@@ -263,6 +303,7 @@ export function registerAutoReviewCli(
             `reviewMode: ${config.reviewMode}\n` +
             `mergeEligibleMainlines: ${config.mergeEligibleMainlines.join(", ")}\n` +
             `phase: ${state.phase}\n` +
+            deferredText +
             `lastFire: ${lastFireText}\n`,
         };
       }

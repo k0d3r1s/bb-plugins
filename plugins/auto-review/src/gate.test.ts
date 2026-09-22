@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { hasActiveSibling, passesThreadGate, selfIsWorktree } from "./gate.js";
+import {
+  hasActiveSibling,
+  passesThreadGate,
+  pickDeferredRelease,
+  selfIsWorktree,
+} from "./gate.js";
 
 const okThread = {
   parentThreadId: null,
@@ -72,6 +77,38 @@ describe("hasActiveSibling", () => {
     expect(
       hasActiveSibling(entries([{ id: "other", status: "idle" }]), "self"),
     ).toBe(false);
+  });
+});
+
+describe("pickDeferredRelease", () => {
+  it("picks nothing when no sibling is deferred", () => {
+    expect(pickDeferredRelease([{ id: "a", phase: "idle" }])).toBeNull();
+    expect(pickDeferredRelease([])).toBeNull();
+  });
+
+  it("picks the first deferred sibling", () => {
+    expect(
+      pickDeferredRelease([
+        { id: "a", phase: "idle" },
+        { id: "b", phase: "deferred" },
+        { id: "c", phase: "deferred" },
+      ]),
+    ).toBe("b");
+  });
+
+  it("releases nobody while a sibling review is queued or in flight", () => {
+    expect(
+      pickDeferredRelease([
+        { id: "a", phase: "deferred" },
+        { id: "b", phase: "awaiting-review" },
+      ]),
+    ).toBeNull();
+    expect(
+      pickDeferredRelease([
+        { id: "a", phase: "deferred" },
+        { id: "b", phase: "pending-dispatch" },
+      ]),
+    ).toBeNull();
   });
 });
 

@@ -3,12 +3,29 @@ import { z } from "zod";
 
 export const AUTO_REVIEW_PHASES = [
   "idle",
+  "deferred",
   "pending-dispatch",
   "awaiting-review",
 ] as const;
 export type AutoReviewPhase = (typeof AUTO_REVIEW_PHASES)[number];
 
+/** Phases where a review turn is already queued or in flight for a thread. */
+export const REVIEW_IN_FLIGHT_PHASES: readonly AutoReviewPhase[] = [
+  "pending-dispatch",
+  "awaiting-review",
+];
+
 export const STALE_WINDOW_MS = 30 * 60 * 1_000;
+
+/**
+ * How long a turn may sit deferred behind a busy sibling before auto-review
+ * gives up on a quiet tree and fires a contention-aware review instead.
+ *
+ * Independent of STALE_WINDOW_MS despite the matching value — that one bounds a
+ * dispatch that may never have landed, this one bounds a wait for a quiet
+ * checkout. Nothing relies on them being equal; change either alone.
+ */
+export const DEFER_WINDOW_MS = 30 * 60 * 1_000;
 
 export const turnStartSchema = z.object({
   sinceSeq: z.number().int().nonnegative(),
@@ -20,6 +37,7 @@ export const threadStateSchema = z.object({
   turnStart: turnStartSchema.optional(),
   pendingEntryId: z.string().optional(),
   dispatchedAt: z.number().optional(),
+  deferredSince: z.number().optional(),
   skip: z.literal(true).optional(),
 });
 export type ThreadState = z.infer<typeof threadStateSchema>;
@@ -85,6 +103,7 @@ export const LATCH_KEYS: readonly string[] = [
   "turnStart",
   "pendingEntryId",
   "dispatchedAt",
+  "deferredSince",
 ];
 
 export function resetToIdlePatch(): {
@@ -94,10 +113,27 @@ export function resetToIdlePatch(): {
   return { set: { phase: "idle" }, remove: [...LATCH_KEYS] };
 }
 
+function elapsedBeyond(
+  since: number | undefined,
+  now: number,
+  window: number,
+): boolean {
+  return since !== undefined && now - since > window;
+}
+
 export function isStale(state: ThreadState, now: number): boolean {
   return (
     state.phase !== "idle" &&
-    state.dispatchedAt !== undefined &&
-    now - state.dispatchedAt > STALE_WINDOW_MS
+    elapsedBeyond(state.dispatchedAt, now, STALE_WINDOW_MS)
   );
+}
+
+/**
+ * True once a deferred turn has waited out the defer window. Waiting is the
+ * preferred answer to a contended checkout, but a sibling that never goes idle
+ * must not strand the review forever — past this point auto-review fires a
+ * contention-aware review rather than keeping the turn queued indefinitely.
+ */
+export function deferralExpired(state: ThreadState, now: number): boolean {
+  return elapsedBeyond(state.deferredSince, now, DEFER_WINDOW_MS);
 }

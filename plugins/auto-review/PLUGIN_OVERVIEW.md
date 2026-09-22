@@ -15,6 +15,13 @@ one provider-neutral implementation driven by bb's `thread.idle` event.
   branch merges into a personal mainline (e.g. `master`) whether the thread runs in a
   dedicated worktree or the primary checkout; a non-personal mainline (e.g. `main`) is
   never a merge target.
+- Defers rather than drops when a sibling thread is busy in the same (shared) working
+  tree: the turn-start cursor is kept and the full review fires once the checkout goes
+  quiet, one deferred thread released per idle. A turn that waits out the 30-minute defer
+  window fires a contention-aware review instead — review, scoped staging and the secret
+  scan intact, plan-continuation and merge replaced with an instruction to stop and report.
+  Parked turns are indexed in plugin storage and swept every 5 minutes, so a turn behind a
+  sibling that never goes idle is released on the deadline rather than waiting on an event.
 - Injects one review-and-commit turn into the same thread, guarded by a per-thread
   latch (persisted in plugin metadata) so it never reviews its own review turn. When that
   turn commits, it judges from the thread's plan whether work remains and continues any

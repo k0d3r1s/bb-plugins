@@ -34,6 +34,13 @@ export interface BuildPromptInput {
   decision: Decision;
   reviewMode: ReviewMode;
   scope: ScopeRendering;
+  /**
+   * Another thread is still running in this shared checkout. The review, the
+   * scoped staging and the secret scan all still apply — only the steps that
+   * need a tree nobody else is writing to (continuing the plan, merging) are
+   * replaced with an explicit instruction not to take them.
+   */
+  contended?: boolean;
 }
 
 const SECRET_PATTERNS = [
@@ -64,10 +71,17 @@ function reviewStep(mode: ReviewMode): string {
 
 export function buildReviewPrompt(input: BuildPromptInput): string {
   const { decision, reviewMode, scope } = input;
+  const contended = input.contended === true;
   const lines: string[] = [];
   lines.push(
     `${AUTO_REVIEW_MARKER} You changed files during your last turn. Review them, apply fixes, and record the result. Follow these steps in order.`,
   );
+  if (contended) {
+    lines.push("");
+    lines.push(
+      "Another thread is running in this shared checkout right now, so the working tree is not yours alone and files may change under you as you work. Steps 1-4 still apply in full; the later steps are restricted below. Work only on the files listed in step 3, and re-read a file immediately before you edit it.",
+    );
+  }
   lines.push("");
   lines.push(`1. ${reviewStep(reviewMode)}`);
   lines.push("2. Apply the fixes the review reports. Re-run the review if it asks you to.");
@@ -98,6 +112,11 @@ export function buildReviewPrompt(input: BuildPromptInput): string {
   lines.push(
     "   Before staging each file, confirm its current contents are the changes you made this turn; if a file also contains edits you did not make (a concurrent human or sibling edit), skip it and report it rather than committing someone else's work.",
   );
+  if (contended) {
+    lines.push(
+      "   That check is not optional here: a thread is actively writing to this tree, so treat any file whose contents you cannot fully account for as someone else's and leave it unstaged.",
+    );
+  }
   lines.push(
     `4. Scan the staged changes for secrets, credentials, or build artifacts before committing. Watch for: ${SECRET_PATTERNS.join("; ")}. If you find any, STOP: unstage, do not commit, and report what you found. Do not commit past a secret.`,
   );
@@ -107,9 +126,11 @@ export function buildReviewPrompt(input: BuildPromptInput): string {
       "5. Commit the staged changes in this repository's normal commit style. Do not add attribution trailers or bracketed tags to the message.",
     );
     lines.push(
-      "6. Now judge whether the work this thread set out to do is actually finished, using this thread's own plan or task as the guide. If there is clearly remaining planned work, continue it: make the next change, review it, stage only the files you edited with an explicit pathspec, scan for secrets, and commit it in the same style — repeat until the plan is complete or you reach a point that needs a decision from the user. Do not invent work: if the plan is already complete, or you cannot tell what remains, stop here and report that the work is done. Never push.",
+      contended
+        ? "6. Stop after that commit. Do NOT continue with further planned work and do NOT merge anything: another thread is running in this shared checkout, so neither is safe to do here. In your final reply, say explicitly that the branch was NOT merged and that this was because the checkout is shared — the user would otherwise assume the usual merge happened — and state what you committed and what planned work remains, so it can be picked up once the checkout is quiet."
+        : "6. Now judge whether the work this thread set out to do is actually finished, using this thread's own plan or task as the guide. If there is clearly remaining planned work, continue it: make the next change, review it, stage only the files you edited with an explicit pathspec, scan for secrets, and commit it in the same style — repeat until the plan is complete or you reach a point that needs a decision from the user. Do not invent work: if the plan is already complete, or you cannot tell what remains, stop here and report that the work is done. Never push.",
     );
-    if (decision.merge) {
+    if (decision.merge && !contended) {
       lines.push(
         "7. Merge the current branch into this repository's mainline locally — but only if the work above is actually complete, not if you paused in step 6 for a decision you still need from the user; in that case leave the branch unmerged and report what remains. This may be the shared primary checkout, not a dedicated worktree, so first run `git status`: if any uncommitted or untracked changes remain that you did not make this turn, they belong to the user or another process — do NOT merge, do NOT switch branches, and never run `git stash`, `git checkout -f`, or `git reset --hard` to force a clean tree; leave everything untouched and report that the merge was skipped because the working tree was not clean. Otherwise merge following the repository's own idiom (inspect recent history with `git log`). Never push. If the merge conflicts, run `git merge --abort`, leave the tree clean, and report the conflict — do not leave a half-merged tree.",
       );

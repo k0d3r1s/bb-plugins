@@ -8,6 +8,8 @@ export const DEFAULT_MERGE_ELIGIBLE_MAINLINES = ["master"];
 
 export const FIRE_REASONS = [
   "fired",
+  "contended",
+  "deferred",
   "no-authorship",
   "empty-scope",
   "no-turn-start",
@@ -29,7 +31,7 @@ export type ProjectConfig = z.infer<typeof projectConfigSchema>;
 
 export const lastFireSchema = z.object({
   at: z.number(),
-  outcome: z.enum(["fired", "stood-down"]),
+  outcome: z.enum(["fired", "deferred", "stood-down"]),
   reason: z.enum(FIRE_REASONS),
   commit: z.boolean(),
   merge: z.boolean(),

@@ -1,4 +1,5 @@
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
+import { REVIEW_IN_FLIGHT_PHASES, type AutoReviewPhase } from "./state.js";
 
 export interface GateThread {
   parentThreadId: string | null;
@@ -44,4 +45,32 @@ export function selfIsWorktree(
 ): boolean {
   const self = entries.find((entry) => entry.id === selfThreadId);
   return self?.environmentIsWorktree === true;
+}
+
+export interface SiblingPhase {
+  id: string;
+  phase: AutoReviewPhase;
+}
+
+/**
+ * Which deferred sibling — if any — may take the now-quiet checkout.
+ *
+ * At most one: the thread released here immediately occupies the environment,
+ * and its own idle drives the next release. A sibling whose review is already
+ * queued or in flight vetoes the whole sweep — that review is about to write
+ * to this tree even though no thread reads as busy yet.
+ */
+export function hasReviewInFlight(
+  siblings: readonly SiblingPhase[],
+): boolean {
+  return siblings.some((s) => REVIEW_IN_FLIGHT_PHASES.includes(s.phase));
+}
+
+export function pickDeferredRelease(
+  siblings: readonly SiblingPhase[],
+): string | null {
+  if (hasReviewInFlight(siblings)) {
+    return null;
+  }
+  return siblings.find((s) => s.phase === "deferred")?.id ?? null;
 }
