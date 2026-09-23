@@ -98,7 +98,7 @@ function stripOurs(hooks) {
       out[event] = groups;
       continue;
     }
-    const hadOurs = groups.some((g) => (g?.hooks ?? []).some((h) => isOurs(h?.command)));
+    const hadOurs = groups.some((g) => Array.isArray(g?.hooks) && g.hooks.some((h) => isOurs(h?.command)));
     const kept = groups
       .map((g) => {
         if (!g || !Array.isArray(g.hooks)) return g;
@@ -157,7 +157,7 @@ export function countOurs(data) {
   let n = 0;
   for (const groups of Object.values(data?.hooks ?? {})) {
     if (!Array.isArray(groups)) continue;
-    for (const g of groups) for (const h of g?.hooks ?? []) if (isOurs(h?.command)) n += 1;
+    for (const g of groups) if (Array.isArray(g?.hooks)) for (const h of g.hooks) if (isOurs(h?.command)) n += 1;
   }
   return n;
 }

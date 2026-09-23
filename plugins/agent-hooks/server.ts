@@ -1,9 +1,6 @@
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
-// @ts-expect-error -- plain ESM module, no type declarations
 import { runAgentHooksCli } from "./src/cli.mjs";
-// @ts-expect-error -- plain ESM module, no type declarations
 import { sync, verifyChecksums } from "./src/sync.mjs";
-// @ts-expect-error -- plain ESM module, no type declarations
 import { INSTALL_DIR } from "./src/wire.mjs";
 
 /**

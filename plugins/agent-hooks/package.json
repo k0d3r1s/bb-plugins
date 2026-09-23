@@ -30,9 +30,14 @@
   },
   "devDependencies": {
     "@get-bb/plugin-sdk": "^0.4.106",
+    "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.0.0",
     "@vitest/coverage-v8": "^4.1.11",
+    "better-sqlite3": "^13.0.3",
+    "cron-parser": "^5.5.0",
+    "hono": "^4.11.9",
     "typescript": "^5.9.2",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.11",
+    "zod": "^4.3.6"
   }
 }
