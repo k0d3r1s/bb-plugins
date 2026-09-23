@@ -75,3 +75,22 @@
 {"id":"f5-fp-multiline-unrelated-redirect","cmd":"echo \"=== header ===\"\nfor f in a b; do\n  n=$(grep -c thing \"$f\" 2>/dev/null || echo 0)\n  printf '  %s %s\\n' \"$f\" \"$n\"\ndone","expect":"allow","why":"REAL FP found in use: echo on line 1 + NAME= on line 3 + 2>/dev/null on line 3 were matched as one write. Must be judged per clause."}
 {"id":"f5-fp-devnull-sink","cmd":"echo \"FOO=bar\" > /dev/null","expect":"allow","why":"a device sink is not a file anyone commits"}
 {"id":"f5-fp-stderr-redirect","cmd":"echo \"VAR=1\" && ls missing 2>/dev/null","expect":"allow","why":"the redirect belongs to a different clause than the assignment"}
+{"id": "home-rm-tilde-slash", "cmd": "rm -rf ~/", "expect": "hard", "why": "home-depth: home itself"}
+{"id": "home-rm-tilde-glob", "cmd": "rm -rf ~/*", "expect": "hard", "why": "home-depth: every top-level home entry"}
+{"id": "home-rm-dotfile", "cmd": "rm ~/.zshrc", "expect": "hard", "why": "home-depth: direct child of home, even without -r"}
+{"id": "home-rm-top-dir", "cmd": "rm -rf ~/workspace", "expect": "hard", "why": "home-depth: direct child of home"}
+{"id": "home-rm-top-dir-trailing-slash", "cmd": "rm -rf ~/workspace/", "expect": "hard", "why": "home-depth: trailing slash does not add depth"}
+{"id": "home-rm-home-var-child", "cmd": "rm -rf $HOME/workspace", "expect": "hard", "why": "home-depth: $HOME/<child> was previously unguarded"}
+{"id": "home-rm-home-brace-slash", "cmd": "rm -rf ${HOME}/", "expect": "hard", "why": "home-depth: ${HOME}/ is home itself"}
+{"id": "home-rm-users-dir", "cmd": "rm -rf /Users/me", "expect": "hard", "why": "home-depth: a user's home"}
+{"id": "home-rm-users-dir-slash", "cmd": "rm -rf /Users/me/", "expect": "hard", "why": "home-depth: a user's home, trailing slash"}
+{"id": "home-rm-users-child", "cmd": "rm -rf /Users/me/Documents", "expect": "hard", "why": "home-depth: direct child of a user's home"}
+{"id": "home-rm-users-root", "cmd": "rm -rf /Users", "expect": "hard", "why": "home-depth: all homes"}
+{"id": "home-rm-linux-home", "cmd": "rm -rf /home/me", "expect": "hard", "why": "home-depth: Linux home"}
+{"id": "home-rm-other-user", "cmd": "rm -rf ~other", "expect": "hard", "why": "home-depth: ~user expands to another home"}
+{"id": "home-rm-dotdot-traversal", "cmd": "rm -rf ~/ws/proj/../..", "expect": "hard", "why": "home-depth: .. can climb back to home"}
+{"id": "home-rm-dot-segment", "cmd": "rm -rf ~/./.ssh", "expect": "hard", "why": "home-depth: ./ hides a direct child"}
+{"id": "home-rm-deep-file", "cmd": "rm ~/workspace/proj/tmp.log", "expect": "allow", "why": "home-depth: deep file under home is ordinary work"}
+{"id": "home-rm-deep-file-force", "cmd": "rm -f /Users/me/workspace/proj/build.log", "expect": "allow", "why": "home-depth: force-only deep file under /Users"}
+{"id": "home-rm-deep-file-home-var", "cmd": "rm $HOME/.cache/foo/bar.json", "expect": "allow", "why": "home-depth: deep file via $HOME"}
+{"id": "home-rm-deep-recursive", "cmd": "rm -rf /Users/me/workspace/proj/dist", "expect": "soft", "why": "home-depth: deep tree: recursive soft block, not the home hard block"}

@@ -28,11 +28,19 @@ vi.mock("./probe.mjs", async (importOriginal) => {
   const real = await importOriginal<Record<string, unknown>>();
   return { ...real, probeAll: vi.fn(real.probeAll as (...a: unknown[]) => unknown) };
 });
+// Never spawn a real `codex app-server` from tests: it would read the real
+// ~/.codex. Skipped by default; single tests script a trust result.
+vi.mock("./codex-trust.mjs", () => ({
+  syncCodexTrust: vi.fn(async () => ({ status: "skipped", reason: "stubbed in tests" })),
+}));
 
 import { runAgentHooksCli } from "./cli.mjs";
+import { syncCodexTrust } from "./codex-trust.mjs";
 import { verifyChecksums, hookScripts } from "./sync.mjs";
 import { probeAll } from "./probe.mjs";
-import { INSTALL_DIR, PROVIDERS, countOurs, expectedCount } from "./wire.mjs";
+import { INSTALL_DIR, PROVIDERS, WIRING, countOurs, expectedCount } from "./wire.mjs";
+
+const WIRING_SCRIPTS = () => WIRING.map((w) => w.script);
 
 type Cli = { exitCode: number; stdout: string; stderr?: string };
 const run = (...argv: string[]): Promise<Cli> => runAgentHooksCli(argv);
@@ -75,6 +83,69 @@ afterEach(() => {
 afterAll(() => {
   rmSync(fakeHome, { recursive: true, force: true });
   process.env.HOME = realHome;
+});
+
+describe("codex trust", () => {
+  const trust = vi.mocked(syncCodexTrust);
+
+  it("re-keys after writing hooks.json and reports what Codex now trusts", async () => {
+    trust.mockResolvedValueOnce({
+      status: "ok",
+      bin: "codex",
+      changed: true,
+      backup: "/x/config.toml.agent-hooks-backup-1",
+      ours: expectedCount(),
+      oursTrusted: expectedCount(),
+      untrusted: ["hooks.json:stop:9:0"],
+    });
+    const r = await run("install", "--provider", "codex");
+    expect(r.exitCode).toBe(0);
+    expect(trust).toHaveBeenLastCalledWith(expect.objectContaining({ sourcePath: cfg.codex, readOnly: false }));
+    const arg = trust.mock.lastCall?.[0] as unknown as { ourCommands: Set<string> };
+    expect(arg.ourCommands.size).toBe(new Set(WIRING_SCRIPTS()).size);
+    expect(r.stdout).toContain(
+      `    codex trust: ${expectedCount()}/${expectedCount()} agent-hooks trusted  (re-keyed; backup: config.toml.agent-hooks-backup-1)`,
+    );
+    expect(r.stdout).toContain("    left untrusted (never trusted before): hooks.json:stop:9:0");
+  });
+
+  it("fails install when Codex still does not trust our hooks, or the rewrite is refused", async () => {
+    trust.mockResolvedValueOnce({ status: "ok", bin: "codex", changed: true, backup: "/x/b", untrusted: [], ours: 6, oursTrusted: 5 });
+    expect((await run("install", "--provider", "codex")).exitCode).toBe(1);
+    trust.mockResolvedValueOnce({ status: "refused", reason: "unexpected hook state" });
+    const r = await run("install", "--provider", "codex");
+    expect(r.exitCode).toBe(1);
+    expect(r.stdout).toContain("codex trust: REFUSED -- unexpected hook state; config.toml left untouched");
+  });
+
+  it("treats a missing Codex as skipped, not failed", async () => {
+    const r = await run("install", "--provider", "codex");
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain("    codex trust: skipped -- stubbed in tests");
+  });
+
+  it("dry run never touches trust", async () => {
+    trust.mockClear();
+    const r = await run("install", "--provider", "codex", "--dry-run");
+    expect(r.stdout).toContain("would re-key hook trust in ~/.codex/config.toml");
+    expect(trust).not.toHaveBeenCalled();
+  });
+
+  it("status reads trust without writing and flags untrusted gates", async () => {
+    await run("install", "--provider", "codex");
+    trust.mockResolvedValueOnce({ status: "ok", bin: "codex", ours: 6, oursTrusted: 0 });
+    const r = await run("status", "--provider", "codex");
+    expect(trust).toHaveBeenLastCalledWith(expect.objectContaining({ readOnly: true }));
+    expect(r.exitCode).toBe(1);
+    expect(r.stdout).toContain("    codex trust: 0/6 agent-hooks trusted");
+  });
+
+  it("uninstall re-keys the neighbours that shifted", async () => {
+    await run("install", "--provider", "codex");
+    trust.mockClear();
+    await run("uninstall", "--provider", "codex");
+    expect(trust).toHaveBeenCalledWith(expect.objectContaining({ sourcePath: cfg.codex, readOnly: false }));
+  });
 });
 
 describe("PROVIDERS isolation", () => {

@@ -13,7 +13,7 @@ full rationale.
 
 | Script | Event | Job |
 |---|---|---|
-| `guard-bash.sh` | PreToolUse(Bash) | Blocks catastrophic `rm`, force push, secret exfiltration, environment dumps |
+| `guard-bash.sh` | PreToolUse(Bash) | Blocks catastrophic `rm` (system paths, a home directory or its direct children), force push, secret exfiltration, environment dumps |
 | `secret-scan.sh` | PreToolUse(Write\|Edit) | Refuses to write a credential into a file that could be committed |
 | `review-plan-before-exit.sh` | PreToolUse(ExitPlanMode) | Denies a plan's first presentation until it has been reviewed |
 | `verify-before-stop.sh` | Stop, SubagentStop | Blocks one stop when this turn's tool output shows an unresolved failure |
@@ -33,6 +33,14 @@ full rationale.
 Providers: `claude-code` (`~/.claude/settings.json`), `claude-work`
 (`~/.claude-work/settings.json`), `codex` (`~/.codex/hooks.json`, wired through
 `codex-shim.sh`).
+
+Codex runs a `hooks.json` hook only when `~/.codex/config.toml` trusts it, and that
+trust is keyed by the hook's position. After every `hooks.json` write, install and
+uninstall ask Codex (`codex app-server`, `hooks/list`) for the new keys and hashes.
+Then they re-key `[hooks.state]`. Our exact commands are trusted, and so is any
+neighbour whose hash was already trusted; nothing else is. `status` reports what
+Codex actually trusts. If no Codex binary answers, this step is skipped
+(`CODEX_BIN` picks one).
 
 ## How updates reach the hooks
 

@@ -6,9 +6,11 @@
 //   ~/.claude-work/settings.json  has hooks.Stop with an EMPTY hooks array and no
 //                                 PreToolUse key at all -- the merge must create
 //                                 keys, never assume them
-//   ~/.codex/hooks.json           carries gitkraken on nine events plus
-//                                 auto-review-commit.sh, deny-bgisolation-none.sh
-//                                 and zclean, all of which must survive
+//   ~/.codex/hooks.json           carries auto-review-commit.sh,
+//                                 deny-bgisolation-none.sh and zclean, all of
+//                                 which must survive. Codex also keeps positional
+//                                 trust for this file in config.toml; see
+//                                 codex-trust.mjs
 //
 // Our entries are identified by their command-path prefix (~/.bb/agent-hooks/).
 // Verified safe: all three configs store each hook as a single command string, and
@@ -136,9 +138,16 @@ export function planClaude(data) {
   return buildPlan(data, (script) => path.join(INSTALL_DIR, script));
 }
 
+const codexCommand = (script) =>
+  `'${path.join(INSTALL_DIR, "codex-shim.sh")}' '${path.join(INSTALL_DIR, script)}'`;
+
 export function planCodex(data) {
-  const shim = path.join(INSTALL_DIR, "codex-shim.sh");
-  return buildPlan(data, (script) => `'${shim}' '${path.join(INSTALL_DIR, script)}'`);
+  return buildPlan(data, codexCommand);
+}
+
+/** The exact command strings planCodex writes -- what Codex trust may auto-accept. */
+export function codexCommands() {
+  return new Set(WIRING.map((w) => codexCommand(w.script)));
 }
 
 export function planUninstall(data) {

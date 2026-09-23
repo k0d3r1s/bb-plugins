@@ -16,7 +16,9 @@ import {
   plan,
   countOurs,
   expectedCount,
+  codexCommands,
 } from "./wire.mjs";
+import { syncCodexTrust } from "./codex-trust.mjs";
 import { sync, syncDrift, verifyChecksums } from "./sync.mjs";
 import { probeAll } from "./probe.mjs";
 
@@ -34,6 +36,24 @@ function targets(argv) {
     throw new Error(`unknown provider '${only}'. Known: ${Object.keys(PROVIDERS).join(", ")}`);
   }
   return [[only, entry]];
+}
+
+// Codex only runs hooks.json entries it has trusted, keyed by position -- so every
+// write to that file has to be followed by re-keying the trust (codex-trust.mjs).
+async function codexTrust(provider, out, { readOnly = false } = {}) {
+  const r = await syncCodexTrust({ sourcePath: provider.config, ourCommands: codexCommands(), readOnly });
+  if (r.status === "skipped") {
+    out(`    codex trust: skipped -- ${r.reason}`);
+    return true;
+  }
+  if (r.status === "refused") {
+    out(`    codex trust: REFUSED -- ${r.reason}; config.toml left untouched`);
+    return false;
+  }
+  const note = r.changed ? `  (re-keyed; backup: ${path.basename(r.backup)})` : "";
+  out(`    codex trust: ${r.oursTrusted}/${r.ours} agent-hooks trusted${note}`);
+  if (r.untrusted?.length) out(`    left untrusted (never trusted before): ${r.untrusted.join(", ")}`);
+  return r.oursTrusted === r.ours;
 }
 
 function diffSummary(before, after) {
@@ -74,11 +94,13 @@ async function cmdInstall(argv, out) {
     if (dry) {
       out(`  ${id}  ${provider.config}`);
       out(`    would write: ${diffSummary(current.data, next)}`);
+      if (provider.kind === "codex") out("    would re-key hook trust in ~/.codex/config.toml");
       continue;
     }
     const backup = current.existed ? backupConfig(provider.config) : null;
     writeConfigAtomic(provider.config, next);
     out(`  ${id}  ${diffSummary(current.data, next)}${backup ? `  (backup: ${path.basename(backup)})` : ""}`);
+    if (provider.kind === "codex" && !(await codexTrust(provider, out))) failures += 1;
   }
   if (dry) out("\ndry run: nothing was written.");
   return failures > 0 ? 1 : 0;
@@ -103,6 +125,7 @@ async function cmdStatus(argv, out) {
     const state = found === want ? "ok" : found === 0 ? "not installed" : "partial";
     if (found !== want) bad += 1;
     out(`  ${id.padEnd(12)} ${String(found)}/${want}  ${state}`);
+    if (provider.kind === "codex" && found > 0 && !(await codexTrust(provider, out, { readOnly: true }))) bad += 1;
   }
 
   const drift = syncDrift();
@@ -146,6 +169,7 @@ async function cmdUninstall(argv, out) {
     const backup = current.existed ? backupConfig(provider.config) : null;
     writeConfigAtomic(provider.config, next);
     out(`  ${id}  ${diffSummary(current.data, next)}${backup ? `  (backup: ${path.basename(backup)})` : ""}`);
+    if (provider.kind === "codex") await codexTrust(provider, out); // re-key the neighbours that shifted
   }
   out(`\nScripts left in place at ${INSTALL_DIR}; remove that directory by hand if you want them gone.`);
   return 0;

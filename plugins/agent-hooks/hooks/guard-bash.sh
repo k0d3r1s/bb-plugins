@@ -86,11 +86,40 @@ clause_has_rm() {
   return 1
 }
 
+# Is this rm target home itself, or a direct child of a home directory?
+#
+# Depth decides, not the prefix: deleting ~/.zshrc, ~/workspace or ~/* is
+# catastrophic, but a file deep inside a project that happens to live under
+# /Users (/Users/me/ws/proj/tmp.log) is ordinary work. Deeper paths return 1
+# and fall through to the recursive-rm soft block, which still gates `rm -r`.
+# Any `.`/`..` segment counts as catastrophic, since ~/a/../.. is home.
+home_rm_is_catastrophic() {
+  local rest
+  # shellcheck disable=SC2016,SC2088  # literal ~ / $HOME / ${HOME} text, as in the scan below
+  case "$1" in
+    '~/'*) rest="${1#\~}" ;;
+    '~'*) return 0 ;; # ~ and ~otheruser
+    '$HOME' | '$HOME/'*) rest="${1#\$HOME}" ;;
+    '${HOME}' | '${HOME}/'*) rest="${1#\$\{HOME\}}" ;;
+    /Users | /home) return 0 ;;
+    /Users/* | /home/*)
+      rest="${1#/*/}" # user[/sub...]
+      case "$rest" in */*) rest="/${rest#*/}" ;; *) return 0 ;; esac
+      ;;
+    *) return 1 ;;
+  esac
+  case "$rest/" in */./* | */../*) return 0 ;; esac
+  while [ "${rest#/}" != "$rest" ]; do rest="${rest#/}"; done
+  while [ "${rest%/}" != "$rest" ]; do rest="${rest%/}"; done
+  case "$rest" in */*) return 1 ;; esac
+  return 0
+}
+
 # ═══════════════════════════════════════════════════════
 # HARD BLOCK — never allowed, no exceptions
 # ═══════════════════════════════════════════════════════
 
-# Catastrophic rm: clause-aware token-scan for system paths. Split on &&/||/;/|
+# Catastrophic rm: clause-aware token-scan for system and home paths. Split on &&/||/;/|
 # and scan ONLY the tokens of clauses that actually invoke `rm`, so a system path
 # in a SIBLING clause (`cd /Users/me/proj && rm localfile`) is never mistaken for
 # an rm target. Within an rm clause this still catches: rm -r /, rm /etc,
@@ -110,16 +139,20 @@ if echo "$COMMAND" | grep -qE '\brm\b'; then
     clause_has_rm "$rm_clause" || continue
     for raw_token in $rm_clause; do
       token="$(normalize_token "$raw_token")"
+      if home_rm_is_catastrophic "$token"; then
+        log_incident "CRITICAL" "BLOCKED: rm targeting home path '$token' in: $COMMAND"
+        deny "HARD BLOCK: rm targets a home directory or its direct child ($token). Catastrophic." "Use a project-relative path under \$CLAUDE_PROJECT_DIR. Never delete home directories or top-level home entries."
+      fi
       # shellcheck disable=SC2016  # '$HOME'/'${HOME}' are literal patterns — the scan matches the unexpanded text of a command like `rm -rf $HOME`
       case "$token" in
-        / | '~' | '$HOME' | '${HOME}' | \
+        / | \
           /etc | /etc/* | /usr | /usr/* | /var | /var/* | /bin | /bin/* | /sbin | /sbin/* | \
           /lib | /lib/* | /lib64 | /lib64/* | /boot | /boot/* | /sys | /sys/* | /proc | /proc/* | \
-          /dev | /dev/* | /opt | /opt/* | /root | /root/* | /home | /home/* | '~/' | '~/'* | \
-          /Users | /Users/* | /System | /System/* | /Library | /Library/* | \
+          /dev | /dev/* | /opt | /opt/* | /root | /root/* | \
+          /System | /System/* | /Library | /Library/* | \
           /Applications | /Applications/* | /Volumes | /Volumes/* | /private | /private/*)
           log_incident "CRITICAL" "BLOCKED: rm targeting system path '$token' in: $COMMAND"
-          deny "HARD BLOCK: rm targets system or home path ($token). Catastrophic." "Use a project-relative path under \$CLAUDE_PROJECT_DIR. Never delete system or home directories."
+          deny "HARD BLOCK: rm targets system path ($token). Catastrophic." "Use a project-relative path under \$CLAUDE_PROJECT_DIR. Never delete system directories."
           ;;
       esac
     done
