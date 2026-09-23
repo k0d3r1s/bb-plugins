@@ -15,7 +15,7 @@
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-16a34a?style=flat-square" alt="MIT license" /></a>
 </p>
 
-![Taskboard inside BB](https://raw.githubusercontent.com/MateoCerquetella/bb-plugins/main/docs/media/hero.png)
+![Taskboard inside BB](./docs/media/hero.png)
 
 Taskboard brings external issues into the place where the work happens. Pick
 exactly one tracker for each BB project, browse a quiet List or Kanban view,
@@ -112,7 +112,7 @@ user-wide assigned-issues feed.
 Choose Jira, then provide the project's Atlassian Cloud URL, account email, API
 token, and JQL. Only HTTPS `*.atlassian.net` origins are accepted.
 
-![Taskboard across projects](https://raw.githubusercontent.com/MateoCerquetella/bb-plugins/main/docs/media/across-projects.png)
+![Taskboard across projects](./docs/media/across-projects.png)
 
 ## Work with tasks
 
@@ -168,7 +168,7 @@ From a project board, choose **New issue** to open the same validated provider
 form with a blank editable title and description. It loads provider metadata for
 review but never creates or mutates an issue until you confirm creation.
 
-![Live task detail](https://raw.githubusercontent.com/MateoCerquetella/bb-plugins/main/docs/media/task-detail.png)
+![Live task detail](./docs/media/task-detail.png)
 
 The CLI covers browsing, detail, transitions, status moves, refresh, and project
 configuration. Direct/composer-assisted issue creation stays in BB's review UI.
@@ -214,21 +214,26 @@ policy or agent instructions.
 
 ## Development
 
+Taskboard builds standalone like the other plugins in this collection. From
+`plugins/taskboard`:
+
 ```sh
-git clone https://github.com/lettland/bb-plugins.git
-cd bb-plugins
-npm install
-npm run check
-bb plugin install ./plugins/taskboard
-npm run dev --workspace bb-plugin-taskboard
+npm install --include=dev --legacy-peer-deps
+npm test               # node:test suites under test/
+npm run typecheck
+npm run check          # types:check, typecheck, test, build, verify:build
+bb plugin install .
+npm run dev            # bb plugin dev .
 ```
 
 `components/ui/` is vendored BB component source pinned by `components.json`.
 Add another component with `npx shadcn add @bb/<component>`. The exact
 `@get-bb/plugin-sdk` development dependency makes the source typecheck without
-a BB checkout. Run `npm run types:refresh` and then `npm install` when updating
-the minimum BB version. The script deliberately uses this workspace's pinned
-BB toolchain even when run from inside a live BB agent environment.
+a BB checkout. Run `npm run types:refresh` and then
+`npm install --include=dev --legacy-peer-deps` when updating the minimum BB
+version. The `build`, `types:check`, and `types:refresh` scripts unset `BB_CLI`
+so they use the plugin's pinned `bb-app` dev dependency even when run from
+inside a live BB agent environment.
 
 ## License
 
