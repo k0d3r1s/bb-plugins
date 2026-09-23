@@ -94,3 +94,13 @@
 {"id": "home-rm-deep-file-force", "cmd": "rm -f /Users/me/workspace/proj/build.log", "expect": "allow", "why": "home-depth: force-only deep file under /Users"}
 {"id": "home-rm-deep-file-home-var", "cmd": "rm $HOME/.cache/foo/bar.json", "expect": "allow", "why": "home-depth: deep file via $HOME"}
 {"id": "home-rm-deep-recursive", "cmd": "rm -rf /Users/me/workspace/proj/dist", "expect": "soft", "why": "home-depth: deep tree: recursive soft block, not the home hard block"}
+{"id": "home-rm-glob-two-deep", "cmd": "rm -f ~/*/*", "expect": "hard", "why": "home-glob: glob in the first segment reaches every top-level tree without -r"}
+{"id": "home-rm-glob-top-child", "cmd": "rm ~/workspace/*", "expect": "hard", "why": "home-glob: glob right under a top-level dir empties it"}
+{"id": "home-rm-glob-home-var", "cmd": "rm $HOME/*", "expect": "hard", "why": "home-glob: every top-level home entry via $HOME"}
+{"id": "home-rm-glob-brace", "cmd": "rm -f ~/{a,b}/c", "expect": "hard", "why": "home-glob: brace expansion in the first segment"}
+{"id": "home-rm-glob-users-seg", "cmd": "rm -f /Users/*/.zshrc", "expect": "hard", "why": "home-glob: glob in the user segment hits every home"}
+{"id": "home-rm-glob-deep-ok", "cmd": "rm ~/proj/build/*.o", "expect": "allow", "why": "home-glob: glob at depth 3 is ordinary cleanup"}
+{"id": "home-rm-ssh-glob", "cmd": "rm ~/.ssh/*", "expect": "hard", "why": "home-cred: credential store"}
+{"id": "home-rm-ssh-file", "cmd": "rm -f ~/.ssh/id_ed25519", "expect": "hard", "why": "home-cred: credential store, single file"}
+{"id": "home-rm-aws-deep", "cmd": "rm /Users/me/.aws/sso/cache/x.json", "expect": "hard", "why": "home-cred: credential store at any depth"}
+{"id": "home-rm-prose-commit-msg", "cmd": "git commit -m \"guard: rm ~/.zshrc is blocked\"", "expect": "hard", "why": "known-fp: prose is scanned like argv; use git commit -F <file>"}

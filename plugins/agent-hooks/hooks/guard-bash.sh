@@ -86,15 +86,21 @@ clause_has_rm() {
   return 1
 }
 
-# Is this rm target home itself, or a direct child of a home directory?
+# Is this rm target home itself, a direct child of a home directory, or
+# something a glob could widen into one?
 #
 # Depth decides, not the prefix: deleting ~/.zshrc, ~/workspace or ~/* is
 # catastrophic, but a file deep inside a project that happens to live under
 # /Users (/Users/me/ws/proj/tmp.log) is ordinary work. Deeper paths return 1
 # and fall through to the recursive-rm soft block, which still gates `rm -r`.
 # Any `.`/`..` segment counts as catastrophic, since ~/a/../.. is home.
+#
+# Depth is read from the literal token, so a glob (* ? [ {) in the user segment
+# or in either of the first two segments under home counts as catastrophic:
+# ~/*/* or ~/workspace/* empties whole top-level trees without needing -r.
+# Credential stores (~/.ssh, ~/.gnupg, ~/.aws) are blocked at any depth.
 home_rm_is_catastrophic() {
-  local rest
+  local rest seg1 seg2
   # shellcheck disable=SC2016,SC2088  # literal ~ / $HOME / ${HOME} text, as in the scan below
   case "$1" in
     '~/'*) rest="${1#\~}" ;;
@@ -104,6 +110,7 @@ home_rm_is_catastrophic() {
     /Users | /home) return 0 ;;
     /Users/* | /home/*)
       rest="${1#/*/}" # user[/sub...]
+      case "${rest%%/*}" in *[\*\?\[\{]*) return 0 ;; esac # /Users/*/...
       case "$rest" in */*) rest="/${rest#*/}" ;; *) return 0 ;; esac
       ;;
     *) return 1 ;;
@@ -111,8 +118,11 @@ home_rm_is_catastrophic() {
   case "$rest/" in */./* | */../*) return 0 ;; esac
   while [ "${rest#/}" != "$rest" ]; do rest="${rest#/}"; done
   while [ "${rest%/}" != "$rest" ]; do rest="${rest%/}"; done
-  case "$rest" in */*) return 1 ;; esac
-  return 0
+  seg1="${rest%%/*}"
+  case "$rest" in */*) seg2="${rest#*/}" && seg2="${seg2%%/*}" ;; *) return 0 ;; esac
+  case "$seg1" in .ssh | .gnupg | .aws) return 0 ;; esac
+  case "$seg1/$seg2" in *[\*\?\[\{]*) return 0 ;; esac
+  return 1
 }
 
 # ═══════════════════════════════════════════════════════
@@ -132,6 +142,11 @@ home_rm_is_catastrophic() {
 #   - mid-token quoting (`r'm' -rf /etc`) — evades the old \brm\b equally
 #   - dynamic paths (`rm -rf $(mktemp -d)/../etc`) — the recursive-rm soft block
 #     below still fires, so this is not an open hole
+#
+# KNOWN FALSE POSITIVE, kept on purpose: prose is scanned like argv. A heredoc
+# body or a `git commit -m "..."` message that contains the word rm next to a
+# home path is hard-blocked. Heredocs can feed a shell (`bash <<EOF`), so their
+# bodies are not skipped; write such text to a file (`git commit -F <file>`).
 if echo "$COMMAND" | grep -qE '\brm\b'; then
   RM_CLAUSES="$(echo "$COMMAND" | tr ';|&' '\n' | tr -s '\n')"
   while IFS= read -r rm_clause; do

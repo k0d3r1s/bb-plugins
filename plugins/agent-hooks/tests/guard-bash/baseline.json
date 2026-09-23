@@ -4,16 +4,16 @@
     "cmd": "docker run --rm -v /Users/k0d3r1s/ws/foo:/app node:22",
     "expect": "allow",
     "why": "F1 FP: --rm is a flag on docker, not an rm command",
-    "actual": "hard",
-    "reason": "HARD BLOCK: rm targets system or home path (/Users/k0d3r1s/ws/foo:/app). Catastrophic."
+    "actual": "allow",
+    "reason": null
   },
   {
     "id": "fp-docker-rm-docker-sock",
     "cmd": "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock alpine",
     "expect": "allow",
     "why": "F1 FP: volume token matched /var/* under the old scan",
-    "actual": "hard",
-    "reason": "HARD BLOCK: rm targets system or home path (/var/run/docker.sock:/var/run/docker.sock). Catastrophic."
+    "actual": "allow",
+    "reason": null
   },
   {
     "id": "rm-sudo-flag-value",
@@ -21,7 +21,7 @@
     "expect": "hard",
     "why": "F1: -u takes a value; a command-word resolver would land on 'root'",
     "actual": "hard",
-    "reason": "HARD BLOCK: rm targets system or home path (/etc). Catastrophic."
+    "reason": "HARD BLOCK: rm targets system path (/etc). Catastrophic."
   },
   {
     "id": "rm-absolute-path",
@@ -29,7 +29,7 @@
     "expect": "hard",
     "why": "F1: basename of /bin/rm is rm",
     "actual": "hard",
-    "reason": "HARD BLOCK: rm targets system or home path (/bin/rm). Catastrophic."
+    "reason": "HARD BLOCK: rm targets system path (/bin/rm). Catastrophic."
   },
   {
     "id": "rm-backslash-escaped",
@@ -37,7 +37,7 @@
     "expect": "hard",
     "why": "F1: leading backslash stripped",
     "actual": "hard",
-    "reason": "HARD BLOCK: rm targets system or home path (/etc). Catastrophic."
+    "reason": "HARD BLOCK: rm targets system path (/etc). Catastrophic."
   },
   {
     "id": "rm-command-builtin",
@@ -45,7 +45,7 @@
     "expect": "hard",
     "why": "F1: bare rm token present",
     "actual": "hard",
-    "reason": "HARD BLOCK: rm targets system or home path (/etc). Catastrophic."
+    "reason": "HARD BLOCK: rm targets system path (/etc). Catastrophic."
   },
   {
     "id": "rm-busybox",
@@ -53,7 +53,7 @@
     "expect": "hard",
     "why": "F1: bare rm token present",
     "actual": "hard",
-    "reason": "HARD BLOCK: rm targets system or home path (/etc). Catastrophic."
+    "reason": "HARD BLOCK: rm targets system path (/etc). Catastrophic."
   },
   {
     "id": "rm-find-exec",
@@ -61,7 +61,7 @@
     "expect": "hard",
     "why": "F1: rm token present even though the command is find",
     "actual": "hard",
-    "reason": "HARD BLOCK: rm targets system or home path (/etc). Catastrophic."
+    "reason": "HARD BLOCK: rm targets system path (/etc). Catastrophic."
   },
   {
     "id": "rm-multiple-assignments",
@@ -69,7 +69,7 @@
     "expect": "hard",
     "why": "F1: assignment prefixes do not hide the rm token",
     "actual": "hard",
-    "reason": "HARD BLOCK: rm targets system or home path (/). Catastrophic."
+    "reason": "HARD BLOCK: rm targets system path (/). Catastrophic."
   },
   {
     "id": "rm-wrapper-stacking",
@@ -77,7 +77,7 @@
     "expect": "hard",
     "why": "F1: stacked wrappers",
     "actual": "hard",
-    "reason": "HARD BLOCK: rm targets system or home path (/). Catastrophic."
+    "reason": "HARD BLOCK: rm targets system path (/). Catastrophic."
   },
   {
     "id": "rm-command-substitution-assign",
@@ -85,7 +85,7 @@
     "expect": "hard",
     "why": "F1 round-2 regression: token is $(rm; needs leading-$( normalization",
     "actual": "hard",
-    "reason": "HARD BLOCK: rm targets system or home path (/Users/foo)). Catastrophic."
+    "reason": "HARD BLOCK: rm targets a home directory or its direct child (/Users/foo). Catastrophic."
   },
   {
     "id": "rm-backtick-substitution",
@@ -93,15 +93,15 @@
     "expect": "hard",
     "why": "F1: backtick normalization",
     "actual": "hard",
-    "reason": "HARD BLOCK: rm targets system or home path (/etc/). Catastrophic."
+    "reason": "HARD BLOCK: rm targets system path (/etc/). Catastrophic."
   },
   {
     "id": "rm-command-substitution-echo",
     "cmd": "echo $(rm -rf ~)",
     "expect": "hard",
     "why": "F1: $( normalization plus trailing ) on the ~ token",
-    "actual": "soft",
-    "reason": "SOFT BLOCK: rm -r/-R deletes a directory tree permanently."
+    "actual": "hard",
+    "reason": "HARD BLOCK: rm targets a home directory or its direct child (~). Catastrophic."
   },
   {
     "id": "rm-quoted-command",
@@ -109,15 +109,15 @@
     "expect": "hard",
     "why": "F1: quote-stripping half of the rule",
     "actual": "hard",
-    "reason": "HARD BLOCK: rm targets system or home path (/etc). Catastrophic."
+    "reason": "HARD BLOCK: rm targets system path (/etc). Catastrophic."
   },
   {
     "id": "rm-trailing-paren-path",
     "cmd": "rm -rf /etc)",
     "expect": "hard",
     "why": "F1: trailing-paren gap the path normalization closes",
-    "actual": "soft",
-    "reason": "SOFT BLOCK: rm -r/-R deletes a directory tree permanently."
+    "actual": "hard",
+    "reason": "HARD BLOCK: rm targets system path (/etc). Catastrophic."
   },
   {
     "id": "rm-docker-flag-and-real-rm",
@@ -125,7 +125,7 @@
     "expect": "hard",
     "why": "F1: bare rm present alongside the --rm flag",
     "actual": "hard",
-    "reason": "HARD BLOCK: rm targets system or home path (/). Catastrophic."
+    "reason": "HARD BLOCK: rm targets system path (/). Catastrophic."
   },
   {
     "id": "rm-sibling-clause-safe",
@@ -141,7 +141,7 @@
     "expect": "hard",
     "why": "& is a clause separator; prove it rather than assume it",
     "actual": "hard",
-    "reason": "HARD BLOCK: rm targets system or home path (/). Catastrophic."
+    "reason": "HARD BLOCK: rm targets system path (/). Catastrophic."
   },
   {
     "id": "rm-multiline",
@@ -149,7 +149,7 @@
     "expect": "hard",
     "why": "multi-line command in one tool_input.command",
     "actual": "hard",
-    "reason": "HARD BLOCK: rm targets system or home path (/etc). Catastrophic."
+    "reason": "HARD BLOCK: rm targets system path (/etc). Catastrophic."
   },
   {
     "id": "gap-find-delete",
@@ -173,7 +173,7 @@
     "expect": "hard",
     "why": "must never regress",
     "actual": "hard",
-    "reason": "HARD BLOCK: rm targets system or home path (/). Catastrophic."
+    "reason": "HARD BLOCK: rm targets system path (/). Catastrophic."
   },
   {
     "id": "catastrophic-rm-home",
@@ -181,7 +181,7 @@
     "expect": "hard",
     "why": "must never regress",
     "actual": "hard",
-    "reason": "HARD BLOCK: rm targets system or home path ($HOME). Catastrophic."
+    "reason": "HARD BLOCK: rm targets a home directory or its direct child ($HOME). Catastrophic."
   },
   {
     "id": "catastrophic-rm-quoted-etc",
@@ -189,7 +189,7 @@
     "expect": "hard",
     "why": "must never regress",
     "actual": "hard",
-    "reason": "HARD BLOCK: rm targets system or home path (/etc). Catastrophic."
+    "reason": "HARD BLOCK: rm targets system path (/etc). Catastrophic."
   },
   {
     "id": "catastrophic-rm-compound-allowlist-bypass",
@@ -252,8 +252,8 @@
     "cmd": "wc -l .env",
     "expect": "allow",
     "why": "F4: line count leaks no value",
-    "actual": "hard",
-    "reason": "HARD BLOCK: Reading .env* files via shell exposes credentials."
+    "actual": "allow",
+    "reason": null
   },
   {
     "id": "env-read-grep-count",
@@ -309,7 +309,7 @@
     "expect": "soft",
     "why": "indirection defeats the other checks",
     "actual": "soft",
-    "reason": "SOFT BLOCK: shell indirection (eval, sh -c, bash -c, etc.) bypasses safety checks."
+    "reason": "SOFT BLOCK: shell indirection (eval, sh -c, bash -c, fish -c, etc.) bypasses safety checks."
   },
   {
     "id": "curl-pipe-shell",
@@ -324,96 +324,96 @@
     "cmd": "env",
     "expect": "hard",
     "why": "F8: full environment dump to stdout",
-    "actual": "allow",
-    "reason": null
+    "actual": "hard",
+    "reason": "HARD BLOCK: 'env' prints every environment variable, exposing every credential at once."
   },
   {
     "id": "f8-env-null",
     "cmd": "env -0",
     "expect": "hard",
     "why": "F8 hole found in review: flag-only form still dumps",
-    "actual": "allow",
-    "reason": null
+    "actual": "hard",
+    "reason": "HARD BLOCK: 'env -0' prints every environment variable, exposing every credential at once."
   },
   {
     "id": "f8-printenv-bare",
     "cmd": "printenv",
     "expect": "hard",
     "why": "F8: dump; F6 regex needs a letter after printenv so it never fires here",
-    "actual": "allow",
-    "reason": null
+    "actual": "hard",
+    "reason": "HARD BLOCK: 'printenv' prints every environment variable, exposing every credential at once."
   },
   {
     "id": "f8-printenv-null",
     "cmd": "printenv -0",
     "expect": "hard",
     "why": "F8 hole found in review",
-    "actual": "allow",
-    "reason": null
+    "actual": "hard",
+    "reason": "HARD BLOCK: 'printenv -0' prints every environment variable, exposing every credential at once."
   },
   {
     "id": "f8-set-bare",
     "cmd": "set",
     "expect": "hard",
     "why": "F8: dumps in bash and fish",
-    "actual": "allow",
-    "reason": null
+    "actual": "hard",
+    "reason": "HARD BLOCK: 'set' prints every environment variable, exposing every credential at once."
   },
   {
     "id": "f8-export-bare",
     "cmd": "export",
     "expect": "hard",
     "why": "F8 hole found in review: identical output to export -p",
-    "actual": "allow",
-    "reason": null
+    "actual": "hard",
+    "reason": "HARD BLOCK: 'export' prints every environment variable, exposing every credential at once."
   },
   {
     "id": "f8-export-p",
     "cmd": "export -p",
     "expect": "hard",
     "why": "F8: dump",
-    "actual": "allow",
-    "reason": null
+    "actual": "hard",
+    "reason": "HARD BLOCK: 'export -p' prints every environment variable, exposing every credential at once."
   },
   {
     "id": "f8-declare-p",
     "cmd": "declare -p",
     "expect": "hard",
     "why": "F8 hole found in review",
-    "actual": "allow",
-    "reason": null
+    "actual": "hard",
+    "reason": "HARD BLOCK: 'declare -p' prints every environment variable, exposing every credential at once."
   },
   {
     "id": "f8-typeset-p",
     "cmd": "typeset -p",
     "expect": "hard",
     "why": "F8 hole found in review",
-    "actual": "allow",
-    "reason": null
+    "actual": "hard",
+    "reason": "HARD BLOCK: 'typeset -p' prints every environment variable, exposing every credential at once."
   },
   {
     "id": "f8-compgen-v",
     "cmd": "compgen -v",
     "expect": "soft",
     "why": "F8: names only, no values",
-    "actual": "allow",
-    "reason": null
+    "actual": "soft",
+    "reason": "SOFT BLOCK: 'compgen -v' lists every variable name."
   },
   {
     "id": "f8-env-redirect",
     "cmd": "env > /tmp/dump.txt",
     "expect": "hard",
     "why": "F8: scope is the command, not the destination",
-    "actual": "allow",
-    "reason": null
+    "actual": "hard",
+    "reason": "HARD BLOCK: 'env' prints every environment variable, exposing every credential at once."
   },
   {
     "id": "f8-env-pipe-tee",
     "cmd": "env | tee /tmp/dump.txt",
     "expect": "hard",
     "why": "F8: pipe evasion closed by scoping to the command",
-    "actual": "allow",
-    "reason": null
+    "actual": "hard",
+    "reason": "HARD BLOCK: 'env' prints every environment variable, exposing every credential at once."
   },
   {
     "id": "f8-allow-env-prefix",
@@ -476,16 +476,16 @@
     "cmd": "fish -c \"set\"",
     "expect": "soft",
     "why": "F8: fish is the user's shell and is absent from the indirection list",
-    "actual": "allow",
-    "reason": null
+    "actual": "soft",
+    "reason": "SOFT BLOCK: shell indirection (eval, sh -c, bash -c, fish -c, etc.) bypasses safety checks."
   },
   {
     "id": "f6-printenv-benign",
     "cmd": "printenv NODE_ENV",
     "expect": "allow",
     "why": "F6: widened allowlist",
-    "actual": "hard",
-    "reason": "HARD BLOCK: printenv <var> prints the credential value to output."
+    "actual": "allow",
+    "reason": null
   },
   {
     "id": "f6-printenv-unenumerated-secret",
@@ -500,24 +500,24 @@
     "cmd": "git push origin +main:main",
     "expect": "hard",
     "why": "F9: refspec force evades the --force regex",
-    "actual": "allow",
-    "reason": null
+    "actual": "hard",
+    "reason": "HARD BLOCK: Force push rewrites shared history."
   },
   {
     "id": "f9-push-global-opt-c",
     "cmd": "git -c core.pager=cat push --force",
     "expect": "hard",
     "why": "F9: global option between git and push breaks adjacency",
-    "actual": "allow",
-    "reason": null
+    "actual": "hard",
+    "reason": "HARD BLOCK: Force push rewrites shared history."
   },
   {
     "id": "f9-push-global-opt-gitdir",
     "cmd": "git --git-dir=/tmp/x push -f",
     "expect": "hard",
     "why": "F9: same adjacency hole",
-    "actual": "allow",
-    "reason": null
+    "actual": "hard",
+    "reason": "HARD BLOCK: Force push rewrites shared history."
   },
   {
     "id": "f9-push-force-with-lease",
@@ -541,8 +541,8 @@
     "expect": "allow",
     "fixture": "env-ignored",
     "why": "F5/D2: ignored destination is safe",
-    "actual": "soft",
-    "reason": "SOFT BLOCK: Writing to a sensitive config/system file."
+    "actual": "allow",
+    "reason": null
   },
   {
     "id": "f5-append-tracked-file",
@@ -550,8 +550,8 @@
     "expect": "soft",
     "fixture": "tracked-config",
     "why": "F5/D2: committable destination stays blocked",
-    "actual": "allow",
-    "reason": null
+    "actual": "soft",
+    "reason": "SOFT BLOCK: 'config/settings.yml' is not gitignored, so this variable could be committed."
   },
   {
     "id": "f5-append-unignored-env",
@@ -560,7 +560,7 @@
     "fixture": "env-not-ignored",
     "why": "F5/D2: an unignored .env is the DANGEROUS case; name-based rule had this backwards",
     "actual": "soft",
-    "reason": "SOFT BLOCK: Writing to a sensitive config/system file."
+    "reason": "SOFT BLOCK: '.env' is not gitignored, so this variable could be committed."
   },
   {
     "id": "f5-append-non-repo",
@@ -569,7 +569,7 @@
     "fixture": "non-repo",
     "why": "F5/D2: fallback must fail CLOSED outside a git tree",
     "actual": "soft",
-    "reason": "SOFT BLOCK: Writing to a sensitive config/system file."
+    "reason": "SOFT BLOCK: '.env' is not gitignored, so this variable could be committed."
   },
   {
     "id": "f5-truncate-ignored-env",
@@ -595,7 +595,263 @@
     "expect": "hard",
     "fixture": "env-ignored",
     "why": "F8 wins on the command regardless of destination",
+    "actual": "hard",
+    "reason": "HARD BLOCK: 'env' prints every environment variable, exposing every credential at once."
+  },
+  {
+    "id": "f5-fp-multiline-unrelated-redirect",
+    "cmd": "echo \"=== header ===\"\nfor f in a b; do\n  n=$(grep -c thing \"$f\" 2>/dev/null || echo 0)\n  printf '  %s %s\\n' \"$f\" \"$n\"\ndone",
+    "expect": "allow",
+    "why": "REAL FP found in use: echo on line 1 + NAME= on line 3 + 2>/dev/null on line 3 were matched as one write. Must be judged per clause.",
+    "actual": "allow",
+    "reason": null
+  },
+  {
+    "id": "f5-fp-devnull-sink",
+    "cmd": "echo \"FOO=bar\" > /dev/null",
+    "expect": "allow",
+    "why": "a device sink is not a file anyone commits",
+    "actual": "allow",
+    "reason": null
+  },
+  {
+    "id": "f5-fp-stderr-redirect",
+    "cmd": "echo \"VAR=1\" && ls missing 2>/dev/null",
+    "expect": "allow",
+    "why": "the redirect belongs to a different clause than the assignment",
+    "actual": "allow",
+    "reason": null
+  },
+  {
+    "id": "home-rm-tilde-slash",
+    "cmd": "rm -rf ~/",
+    "expect": "hard",
+    "why": "home-depth: home itself",
+    "actual": "hard",
+    "reason": "HARD BLOCK: rm targets a home directory or its direct child (~/). Catastrophic."
+  },
+  {
+    "id": "home-rm-tilde-glob",
+    "cmd": "rm -rf ~/*",
+    "expect": "hard",
+    "why": "home-depth: every top-level home entry",
+    "actual": "hard",
+    "reason": "HARD BLOCK: rm targets a home directory or its direct child (~/*). Catastrophic."
+  },
+  {
+    "id": "home-rm-dotfile",
+    "cmd": "rm ~/.zshrc",
+    "expect": "hard",
+    "why": "home-depth: direct child of home, even without -r",
+    "actual": "hard",
+    "reason": "HARD BLOCK: rm targets a home directory or its direct child (~/.zshrc). Catastrophic."
+  },
+  {
+    "id": "home-rm-top-dir",
+    "cmd": "rm -rf ~/workspace",
+    "expect": "hard",
+    "why": "home-depth: direct child of home",
+    "actual": "hard",
+    "reason": "HARD BLOCK: rm targets a home directory or its direct child (~/workspace). Catastrophic."
+  },
+  {
+    "id": "home-rm-top-dir-trailing-slash",
+    "cmd": "rm -rf ~/workspace/",
+    "expect": "hard",
+    "why": "home-depth: trailing slash does not add depth",
+    "actual": "hard",
+    "reason": "HARD BLOCK: rm targets a home directory or its direct child (~/workspace/). Catastrophic."
+  },
+  {
+    "id": "home-rm-home-var-child",
+    "cmd": "rm -rf $HOME/workspace",
+    "expect": "hard",
+    "why": "home-depth: $HOME/<child> was previously unguarded",
+    "actual": "hard",
+    "reason": "HARD BLOCK: rm targets a home directory or its direct child ($HOME/workspace). Catastrophic."
+  },
+  {
+    "id": "home-rm-home-brace-slash",
+    "cmd": "rm -rf ${HOME}/",
+    "expect": "hard",
+    "why": "home-depth: ${HOME}/ is home itself",
+    "actual": "hard",
+    "reason": "HARD BLOCK: rm targets a home directory or its direct child (${HOME}/). Catastrophic."
+  },
+  {
+    "id": "home-rm-users-dir",
+    "cmd": "rm -rf /Users/me",
+    "expect": "hard",
+    "why": "home-depth: a user's home",
+    "actual": "hard",
+    "reason": "HARD BLOCK: rm targets a home directory or its direct child (/Users/me). Catastrophic."
+  },
+  {
+    "id": "home-rm-users-dir-slash",
+    "cmd": "rm -rf /Users/me/",
+    "expect": "hard",
+    "why": "home-depth: a user's home, trailing slash",
+    "actual": "hard",
+    "reason": "HARD BLOCK: rm targets a home directory or its direct child (/Users/me/). Catastrophic."
+  },
+  {
+    "id": "home-rm-users-child",
+    "cmd": "rm -rf /Users/me/Documents",
+    "expect": "hard",
+    "why": "home-depth: direct child of a user's home",
+    "actual": "hard",
+    "reason": "HARD BLOCK: rm targets a home directory or its direct child (/Users/me/Documents). Catastrophic."
+  },
+  {
+    "id": "home-rm-users-root",
+    "cmd": "rm -rf /Users",
+    "expect": "hard",
+    "why": "home-depth: all homes",
+    "actual": "hard",
+    "reason": "HARD BLOCK: rm targets a home directory or its direct child (/Users). Catastrophic."
+  },
+  {
+    "id": "home-rm-linux-home",
+    "cmd": "rm -rf /home/me",
+    "expect": "hard",
+    "why": "home-depth: Linux home",
+    "actual": "hard",
+    "reason": "HARD BLOCK: rm targets a home directory or its direct child (/home/me). Catastrophic."
+  },
+  {
+    "id": "home-rm-other-user",
+    "cmd": "rm -rf ~other",
+    "expect": "hard",
+    "why": "home-depth: ~user expands to another home",
+    "actual": "hard",
+    "reason": "HARD BLOCK: rm targets a home directory or its direct child (~other). Catastrophic."
+  },
+  {
+    "id": "home-rm-dotdot-traversal",
+    "cmd": "rm -rf ~/ws/proj/../..",
+    "expect": "hard",
+    "why": "home-depth: .. can climb back to home",
+    "actual": "hard",
+    "reason": "HARD BLOCK: rm targets a home directory or its direct child (~/ws/proj/../..). Catastrophic."
+  },
+  {
+    "id": "home-rm-dot-segment",
+    "cmd": "rm -rf ~/./.ssh",
+    "expect": "hard",
+    "why": "home-depth: ./ hides a direct child",
+    "actual": "hard",
+    "reason": "HARD BLOCK: rm targets a home directory or its direct child (~/./.ssh). Catastrophic."
+  },
+  {
+    "id": "home-rm-deep-file",
+    "cmd": "rm ~/workspace/proj/tmp.log",
+    "expect": "allow",
+    "why": "home-depth: deep file under home is ordinary work",
+    "actual": "allow",
+    "reason": null
+  },
+  {
+    "id": "home-rm-deep-file-force",
+    "cmd": "rm -f /Users/me/workspace/proj/build.log",
+    "expect": "allow",
+    "why": "home-depth: force-only deep file under /Users",
+    "actual": "allow",
+    "reason": null
+  },
+  {
+    "id": "home-rm-deep-file-home-var",
+    "cmd": "rm $HOME/.cache/foo/bar.json",
+    "expect": "allow",
+    "why": "home-depth: deep file via $HOME",
+    "actual": "allow",
+    "reason": null
+  },
+  {
+    "id": "home-rm-deep-recursive",
+    "cmd": "rm -rf /Users/me/workspace/proj/dist",
+    "expect": "soft",
+    "why": "home-depth: deep tree: recursive soft block, not the home hard block",
     "actual": "soft",
-    "reason": "SOFT BLOCK: Writing to a sensitive config/system file."
+    "reason": "SOFT BLOCK: rm -r/-R deletes a directory tree permanently."
+  },
+  {
+    "id": "home-rm-glob-two-deep",
+    "cmd": "rm -f ~/*/*",
+    "expect": "hard",
+    "why": "home-glob: glob in the first segment reaches every top-level tree without -r",
+    "actual": "hard",
+    "reason": "HARD BLOCK: rm targets a home directory or its direct child (~/*/*). Catastrophic."
+  },
+  {
+    "id": "home-rm-glob-top-child",
+    "cmd": "rm ~/workspace/*",
+    "expect": "hard",
+    "why": "home-glob: glob right under a top-level dir empties it",
+    "actual": "hard",
+    "reason": "HARD BLOCK: rm targets a home directory or its direct child (~/workspace/*). Catastrophic."
+  },
+  {
+    "id": "home-rm-glob-home-var",
+    "cmd": "rm $HOME/*",
+    "expect": "hard",
+    "why": "home-glob: every top-level home entry via $HOME",
+    "actual": "hard",
+    "reason": "HARD BLOCK: rm targets a home directory or its direct child ($HOME/*). Catastrophic."
+  },
+  {
+    "id": "home-rm-glob-brace",
+    "cmd": "rm -f ~/{a,b}/c",
+    "expect": "hard",
+    "why": "home-glob: brace expansion in the first segment",
+    "actual": "hard",
+    "reason": "HARD BLOCK: rm targets a home directory or its direct child (~/{a,b}/c). Catastrophic."
+  },
+  {
+    "id": "home-rm-glob-users-seg",
+    "cmd": "rm -f /Users/*/.zshrc",
+    "expect": "hard",
+    "why": "home-glob: glob in the user segment hits every home",
+    "actual": "hard",
+    "reason": "HARD BLOCK: rm targets a home directory or its direct child (/Users/k0d3r1s/.zshrc). Catastrophic."
+  },
+  {
+    "id": "home-rm-glob-deep-ok",
+    "cmd": "rm ~/proj/build/*.o",
+    "expect": "allow",
+    "why": "home-glob: glob at depth 3 is ordinary cleanup",
+    "actual": "allow",
+    "reason": null
+  },
+  {
+    "id": "home-rm-ssh-glob",
+    "cmd": "rm ~/.ssh/*",
+    "expect": "hard",
+    "why": "home-cred: credential store",
+    "actual": "hard",
+    "reason": "HARD BLOCK: rm targets a home directory or its direct child (~/.ssh/*). Catastrophic."
+  },
+  {
+    "id": "home-rm-ssh-file",
+    "cmd": "rm -f ~/.ssh/id_ed25519",
+    "expect": "hard",
+    "why": "home-cred: credential store, single file",
+    "actual": "hard",
+    "reason": "HARD BLOCK: rm targets a home directory or its direct child (~/.ssh/id_ed25519). Catastrophic."
+  },
+  {
+    "id": "home-rm-aws-deep",
+    "cmd": "rm /Users/me/.aws/sso/cache/x.json",
+    "expect": "hard",
+    "why": "home-cred: credential store at any depth",
+    "actual": "hard",
+    "reason": "HARD BLOCK: rm targets a home directory or its direct child (/Users/me/.aws/sso/cache/x.json). Catastrophic."
+  },
+  {
+    "id": "home-rm-prose-commit-msg",
+    "cmd": "git commit -m \"guard: rm ~/.zshrc is blocked\"",
+    "expect": "hard",
+    "why": "known-fp: prose is scanned like argv; use git commit -F <file>",
+    "actual": "hard",
+    "reason": "HARD BLOCK: rm targets a home directory or its direct child (~/.zshrc). Catastrophic."
   }
 ]

@@ -19,6 +19,13 @@ full rationale.
 | `verify-before-stop.sh` | Stop, SubagentStop | Blocks one stop when this turn's tool output shows an unresolved failure |
 | `session-reset.sh` | SessionStart | Prunes stale plan-review gates so a crashed session cannot deadlock the next |
 
+The home `rm` rule reads depth from the literal target. A home directory, its
+direct children, any `.`/`..` segment, a glob (`*`, `?`, `[`, `{`) in the first
+two segments (`~/*/*`, `~/workspace/*`), and anything under `~/.ssh`, `~/.gnupg`
+or `~/.aws` are hard-blocked. Deeper files are allowed; deeper `rm -r` gets the
+recursive soft block. Heredoc bodies and `-m` messages are scanned like argv, so
+prose that says rm next to a home path is blocked too: use `git commit -F <file>`.
+
 `codex-shim.sh` bridges Codex's hook environment (which lacks `CLAUDE_PROJECT_DIR`) to these scripts.
 
 ## Commands
