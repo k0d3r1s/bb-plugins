@@ -241,6 +241,15 @@ if echo "$COMMAND" | grep -qE '\b(cat|head|tail|less|more|bat|grep|awk|sed|xxd|o
         continue
         ;; # secret-free templates — safe to read/inspect
       *.env | *.env.*)
+        # `.env.NAME` with an ALL-CAPS identifier is a property path, not a file:
+        # `jq '.env.ANTHROPIC_BASE_URL' settings.json`, `process.env.HOME`. Dotenv
+        # files are named in lowercase (.env.local, .env.production), so those
+        # still fall through. A file literally named `.env.PROD` is the accepted gap.
+        # Strip every such path and re-test, so `.env.local;.env.X` still blocks.
+        case "$(printf '%s' "$token" | sed -E 's/\.env\.[A-Z_][A-Z0-9_]*([^A-Za-z0-9_.-]|$)/\1/g')" in
+          *.env | *.env.*) ;;
+          *) continue ;;
+        esac
         # Non-leaking shape checks are allowed: `grep -c KEY .env` (pre-existing)
         # and `wc -l .env` (F4). Deliberately NOT `grep -q`, which is a bisection
         # oracle — guess a prefix, read the exit code, extract the secret one

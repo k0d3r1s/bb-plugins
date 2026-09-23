@@ -104,3 +104,10 @@
 {"id": "home-rm-ssh-file", "cmd": "rm -f ~/.ssh/id_ed25519", "expect": "hard", "why": "home-cred: credential store, single file"}
 {"id": "home-rm-aws-deep", "cmd": "rm /Users/me/.aws/sso/cache/x.json", "expect": "hard", "why": "home-cred: credential store at any depth"}
 {"id": "home-rm-prose-commit-msg", "cmd": "git commit -m \"guard: rm ~/.zshrc is blocked\"", "expect": "hard", "why": "known-fp: prose is scanned like argv; use git commit -F <file>"}
+{"id": "env-path-jq-property", "cmd": "jq -r '.env.ANTHROPIC_BASE_URL' settings.json | head -1", "expect": "allow", "why": "env-path: ALL-CAPS .env.NAME is a jq property path, not a file"}
+{"id": "env-path-process-env", "cmd": "node -e 'console.log(process.env.HOME)' | head -1", "expect": "allow", "why": "env-path: process.env.NAME is a property access"}
+{"id": "env-path-local-file", "cmd": "cat .env.local", "expect": "hard", "why": "env-path: lowercase dotenv file still blocked"}
+{"id": "env-path-production-file", "cmd": "head -3 .env.production", "expect": "hard", "why": "env-path: lowercase dotenv file still blocked"}
+{"id": "env-path-mixed-case-file", "cmd": "cat .env.Production", "expect": "hard", "why": "env-path: identifier must be ALL-CAPS to the next boundary"}
+{"id": "env-path-dotted-suffix", "cmd": "cat .env.FOO.local", "expect": "hard", "why": "env-path: a dotted suffix makes it a file name again"}
+{"id": "env-path-smuggled", "cmd": "cat .env.local;.env.X", "expect": "hard", "why": "env-path: stripping the property path leaves the real file"}
