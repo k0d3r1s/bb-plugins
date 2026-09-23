@@ -414,10 +414,16 @@ test("install refuses checkouts and projects it cannot trust", async (t) => {
     {},
     new RegExp(`^BB project proj_other has no local source at ${escapeRegExp(fixture.repo)}\\n$`),
   );
+  // Linux runners ship docker in /usr/bin, so a system PATH cannot model its
+  // absence; expose only git, the one host tool install needs before docker.
+  const gitOnly = path.join(fixture.fixtureRoot, "git-only-bin");
+  await mkdir(gitOnly);
+  const { stdout: gitPath } = await execFileAsync("/bin/sh", ["-c", "command -v git"]);
+  await symlink(gitPath.trim(), path.join(gitOnly, "git"));
   await expectFailure(
     "docker missing",
     ["install"],
-    { env: { BB_CLI: path.join(fixture.bin, "bb"), PATH: "/usr/bin:/bin" } },
+    { env: { BB_CLI: path.join(fixture.bin, "bb"), PATH: gitOnly } },
     /^docker is not on PATH\n$/,
   );
 
