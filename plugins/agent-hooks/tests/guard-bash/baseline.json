@@ -853,5 +853,61 @@
     "why": "known-fp: prose is scanned like argv; use git commit -F <file>",
     "actual": "hard",
     "reason": "HARD BLOCK: rm targets a home directory or its direct child (~/.zshrc). Catastrophic."
+  },
+  {
+    "id": "env-path-jq-property",
+    "cmd": "jq -r '.env.ANTHROPIC_BASE_URL' settings.json | head -1",
+    "expect": "allow",
+    "why": "env-path: ALL-CAPS .env.NAME is a jq property path, not a file",
+    "actual": "allow",
+    "reason": null
+  },
+  {
+    "id": "env-path-process-env",
+    "cmd": "node -e 'console.log(process.env.HOME)' | head -1",
+    "expect": "allow",
+    "why": "env-path: process.env.NAME is a property access",
+    "actual": "allow",
+    "reason": null
+  },
+  {
+    "id": "env-path-local-file",
+    "cmd": "cat .env.local",
+    "expect": "hard",
+    "why": "env-path: lowercase dotenv file still blocked",
+    "actual": "hard",
+    "reason": "HARD BLOCK: Reading .env* files via shell exposes credentials."
+  },
+  {
+    "id": "env-path-production-file",
+    "cmd": "head -3 .env.production",
+    "expect": "hard",
+    "why": "env-path: lowercase dotenv file still blocked",
+    "actual": "hard",
+    "reason": "HARD BLOCK: Reading .env* files via shell exposes credentials."
+  },
+  {
+    "id": "env-path-mixed-case-file",
+    "cmd": "cat .env.Production",
+    "expect": "hard",
+    "why": "env-path: identifier must be ALL-CAPS to the next boundary",
+    "actual": "hard",
+    "reason": "HARD BLOCK: Reading .env* files via shell exposes credentials."
+  },
+  {
+    "id": "env-path-dotted-suffix",
+    "cmd": "cat .env.FOO.local",
+    "expect": "hard",
+    "why": "env-path: a dotted suffix makes it a file name again",
+    "actual": "hard",
+    "reason": "HARD BLOCK: Reading .env* files via shell exposes credentials."
+  },
+  {
+    "id": "env-path-smuggled",
+    "cmd": "cat .env.local;.env.X",
+    "expect": "hard",
+    "why": "env-path: stripping the property path leaves the real file",
+    "actual": "hard",
+    "reason": "HARD BLOCK: Reading .env* files via shell exposes credentials."
   }
 ]
