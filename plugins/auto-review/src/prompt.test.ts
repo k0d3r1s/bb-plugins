@@ -126,44 +126,6 @@ describe("buildReviewPrompt", () => {
     expect(text).not.toMatch(/\bmain\b/);
   });
 
-  it("keeps review, scoped staging and the secret scan under contention", () => {
-    const text = buildReviewPrompt({
-      decision: { commit: true, merge: true },
-      reviewMode: "auto",
-      scope: baseScope,
-      contended: true,
-    });
-    expect(text).toContain("git add -- ");
-    expect(text).toMatch(/Never use `git add -A`/);
-    expect(text).toContain("sk-ant-");
-    expect(text).toMatch(/Commit the staged changes/);
-    expect(text).toMatch(/another thread is running in this shared checkout/i);
-  });
-
-  it("drops continuation and merge under contention, and says so", () => {
-    const text = buildReviewPrompt({
-      decision: { commit: true, merge: true },
-      reviewMode: "auto",
-      scope: baseScope,
-      contended: true,
-    });
-    expect(text).not.toMatch(/Merge the current branch/);
-    expect(text).not.toMatch(/Do not invent work/);
-    expect(text).toMatch(/Do NOT continue with further planned work/);
-    expect(text).toMatch(/what planned work remains/);
-  });
-
-  it("still refuses to commit under contention on a protected mainline", () => {
-    const text = buildReviewPrompt({
-      decision: { commit: false, merge: false },
-      reviewMode: "auto",
-      scope: baseScope,
-      contended: true,
-    });
-    expect(text).toContain("Do NOT commit");
-    expect(text).not.toMatch(/Merge the current branch/);
-  });
-
   it("requires the devkit workflow in devkit mode", () => {
     const text = buildReviewPrompt({
       decision: { commit: true, merge: false },

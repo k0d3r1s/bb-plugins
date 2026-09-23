@@ -57,7 +57,7 @@ All commands accept `--json`.
 - `bb auto-review reset <thread-id>` — clear a wedged loop-guard latch (and skip) for a
   thread whose review never completed. Use this if `status` shows a non-`idle` phase that
   never clears. **On a `deferred` thread this is not an unstick — it cancels.** That phase
-  is a normal wait that resolves on its own (see *Shared checkouts*); resetting it throws
+  is a normal wait that resolves on its own (see *One review per provider*); resetting it throws
   away that turn's pending review and commit.
 
 ## Settings
@@ -83,33 +83,29 @@ Per-project overrides and per-thread skip are stored by the plugin, not in setti
 
 A feature branch merges into an eligible mainline (e.g. `master`) whether it runs in a dedicated worktree or the primary checkout. When the root mainline is non-eligible (protected, e.g. `main`), auto-review never commits in the primary checkout — on any branch checked out there — so protected-mainline work stays in a dedicated worktree. Merge is local only — auto-review never pushes.
 
-## Shared checkouts
+## One review per provider
 
-Threads sharing an environment share one working tree. Other threads running there — a
-sibling coding thread, this thread's own advisor, subagents — never hold a review back:
-every review stages only the files its own turn authored (explicit pathspec) and skips any
-file carrying edits it did not make.
+Other threads running — in the same checkout or anywhere else, including this thread's own
+advisor and subagents — never hold a review back, and never change what it does. Each review
+stages, commits and merges only the files its own turn authored (explicit pathspec), skips
+any file carrying edits it did not make, and the merge step itself refuses to run while the
+tree holds changes this turn did not make.
 
-If another user coding thread (top-level, visible, not plugin-created) is running when the
-review fires, that review is **contention-aware**: review, fixes, scoped staging, the secret
-scan and the commit all run as normal, and only the two steps that need the tree to
-themselves — continuing the plan, and the local merge, which switches branches under the
-other thread — are replaced with an instruction to stop and report what remains. An advisor
-or subagent running for the thread does not trigger this.
+What auto-review limits is how many reviews run at once **per provider**, because reviews on
+one provider share that provider's usage limits: a Claude Code review here and a Claude Code
+review in another project compete, a Claude Code review and a Codex review do not. When a
+turn ends while another thread on the same provider — in any project — has its auto-review
+queued or running, auto-review **defers** that turn rather than skipping it: the turn-start
+cursor is kept, and the review fires — in full — as soon as the blocking review ends. If the
+thread takes another turn while deferred, the earlier cursor is carried forward, so one
+review covers both turns. A thread is never deferred behind itself.
 
-What auto-review does not allow is two **reviews** in one checkout at once — two
-stage-commit-merge sequences racing the same tree. When a turn ends while another thread's
-auto-review is queued or running in the same checkout, auto-review **defers** that turn
-rather than skipping it: the turn-start cursor is kept, and the review fires — in full — as
-soon as the blocking review ends. If the thread takes another turn while deferred, the
-earlier cursor is carried forward, so one review covers both turns. A thread is never
-deferred behind itself.
-
-Deferred turns are released one at a time: when the blocking review's thread goes idle (or
-fails, or is archived), one parked turn starts its review, and that review's idle releases
-the next. If that event is missed, a background sweep every 5 minutes retries any parked turn
-whose checkout no longer has a review in flight. A review latch older than 30 minutes on a
-thread that is no longer running counts as a lost idle, not a review, so it never blocks.
+Deferred turns are released one at a time per provider: when a review ends (its thread goes
+idle, fails, is archived or deleted, or its queued review is cancelled), one parked turn on
+that provider starts its review, and that review's end releases the next. If that event is
+missed, a background sweep every 5 minutes retries any parked turn whose provider no longer
+has a review in flight. A review latch older than 30 minutes on a thread that is no longer
+running counts as a lost idle, not a review, so it never blocks.
 
 `bb auto-review status` shows a parked turn as phase `deferred`, with how long it has waited
 and what will release it. `bb auto-review reset <thread-id>` drops the turn instead — its
@@ -118,12 +114,9 @@ review and commit then never run.
 ## `reason` values in `status`
 
 - `fired` — a review was injected.
-- `contended` — a review was injected while another user coding thread was running in the
-  same checkout. Review, scoped staging, the secret scan and the commit still ran;
-  continuing the plan and merging were dropped (see *Shared checkouts*).
-- `sibling-active` — another thread's auto-review is running in the same checkout. Paired
-  with outcome `deferred`, this turn is parked and will be reviewed as soon as that review
-  ends. Not a skip — nothing is lost.
+- `sibling-active` — another thread on the same provider (in any project) has its
+  auto-review running. Paired with outcome `deferred`, this turn is parked and will be
+  reviewed as soon as that review ends. Not a skip — nothing is lost.
 - `no-authorship` — the agent changed no files this turn.
 - `empty-scope` — the files it changed are no longer uncommitted or ahead (e.g. reverted).
 - `no-turn-start` — no turn-start cursor was recorded (a missed start event); stood down, fail-safe.

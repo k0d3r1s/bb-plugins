@@ -15,14 +15,14 @@ one provider-neutral implementation driven by bb's `thread.idle` event.
   branch merges into a personal mainline (e.g. `master`) whether the thread runs in a
   dedicated worktree or the primary checkout; a non-personal mainline (e.g. `main`) is
   never a merge target.
-- Defers rather than drops only when another thread's review is queued or running in the
-  same (shared) working tree — never because other threads are merely active, and never
-  behind the thread itself. The turn-start cursor is kept and the full review fires when
-  the blocking review ends, one deferred thread released per idle (or failure/archive).
-  Parked turns are indexed in plugin storage and swept every 5 minutes, so a release whose
-  event was missed still happens. A review that fires while another user coding thread is
-  running is contention-aware: review, scoped staging, secret scan and commit intact,
-  plan-continuation and merge replaced with an instruction to stop and report.
+- Runs one review at a time per provider, across all projects, since reviews on one
+  provider share its usage limits: a turn ending while another thread on the same provider
+  has its review queued or running is deferred, not dropped — never because other threads
+  are merely active, never behind a different provider, never behind the thread itself.
+  The turn-start cursor is kept and the full review fires when the blocking review ends,
+  one deferred turn per provider released per review end. In-flight reviews and parked
+  turns are indexed in plugin storage, and parked turns are swept every 5 minutes, so a
+  release whose event was missed still happens.
 - Injects one review-and-commit turn into the same thread, guarded by a per-thread
   latch (persisted in plugin metadata) so it never reviews its own review turn. When that
   turn commits, it judges from the thread's plan whether work remains and continues any

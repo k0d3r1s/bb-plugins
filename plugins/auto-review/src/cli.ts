@@ -231,7 +231,7 @@ export function registerAutoReviewCli(
                 exitCode: 0,
                 stdout:
                   `reset ${threadId} (dropped a deferred turn).\n` +
-                  "That turn was waiting for another review in this checkout to finish, not stuck — its review and commit will now never run.\n",
+                  "That turn was waiting for another review on its provider to finish, not stuck — its review and commit will now never run.\n",
               };
             }
             return {
@@ -292,7 +292,7 @@ export function registerAutoReviewCli(
         const deferredText =
           state.phase === "deferred" && state.deferredSince !== undefined
             ? `deferred for: ${Math.floor((Date.now() - state.deferredSince) / 60_000)} min — ` +
-              "waiting for another thread's auto-review to finish in this checkout.\n" +
+              "waiting for another auto-review on the same provider to finish.\n" +
               "  It fires automatically as soon as that review ends.\n" +
               `  To drop it instead: bb auto-review reset ${threadId}\n`
             : "";

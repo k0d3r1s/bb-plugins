@@ -8,7 +8,6 @@ export const DEFAULT_MERGE_ELIGIBLE_MAINLINES = ["master"];
 
 export const FIRE_REASONS = [
   "fired",
-  "contended",
   "deferred",
   "no-authorship",
   "empty-scope",

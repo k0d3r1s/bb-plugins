@@ -2,7 +2,8 @@ import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 
 /**
- * The index of turns currently parked behind a busy checkout.
+ * The index of turns currently parked behind another review on the same
+ * provider.
  *
  * Per-thread state already records that a turn is deferred, but nothing
  * enumerates threads, so a sweep with no thread in hand could not find them.
@@ -19,6 +20,8 @@ export const deferralSchema = z.object({
   threadId: z.string(),
   projectId: z.string(),
   environmentId: z.string(),
+  /** Absent only on entries parked before deferral was keyed on provider. */
+  providerId: z.string().optional(),
 });
 export type Deferral = z.infer<typeof deferralSchema>;
 

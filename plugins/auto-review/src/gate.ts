@@ -38,26 +38,6 @@ export function isBusyStatus(status: string): boolean {
   return BUSY_STATUSES.has(status);
 }
 
-/**
- * Whether another user coding thread is running in this checkout right now.
- * That never holds a review back, but the steps that need the tree to
- * themselves — continuing the plan, and the local merge, which switches
- * branches under whoever else is working here — are dropped. Hidden,
- * plugin-origin and child threads (an advisor, a subagent) belong to some
- * coding thread's own turn and do not count.
- */
-export function hasBusyCodingSibling(
-  entries: readonly ThreadListEntry[],
-  selfThreadId: string,
-): boolean {
-  return entries.some(
-    (entry) =>
-      entry.id !== selfThreadId &&
-      isBusyStatus(entry.status) &&
-      passesThreadGate(entry),
-  );
-}
-
 export function selfIsWorktree(
   entries: readonly ThreadListEntry[],
   selfThreadId: string,
@@ -66,49 +46,26 @@ export function selfIsWorktree(
   return self?.environmentIsWorktree === true;
 }
 
-export interface SiblingReview {
-  id: string;
+export interface HeldReview {
   state: ThreadState;
   busy: boolean;
 }
 
 /**
- * Whether this sibling's own auto-review is queued or running. That is the only
- * thing that parks another thread's turn: plain activity in the checkout does
- * not, because every review stages just the files its own turn authored. A
+ * Whether a thread's own auto-review is queued or running. That is the only
+ * thing that parks another turn on the same provider: plain activity never
+ * does, because every review stages just the files its own turn authored. A
  * latch past the stale window on a thread that is no longer busy is a lost
  * idle, not a review, so it does not count — one missed event must not park
- * every other thread in the checkout for good. A latch with no dispatch time
- * on an idle thread cannot be dated at all, so it is treated the same way.
+ * every other turn on the provider for good. A latch with no dispatch time on
+ * an idle thread cannot be dated at all, so it is treated the same way.
  */
-export function reviewInFlight(sibling: SiblingReview, now: number): boolean {
-  if (!REVIEW_IN_FLIGHT_PHASES.includes(sibling.state.phase)) {
+export function reviewInFlight(review: HeldReview, now: number): boolean {
+  if (!REVIEW_IN_FLIGHT_PHASES.includes(review.state.phase)) {
     return false;
   }
-  if (sibling.busy) {
+  if (review.busy) {
     return true;
   }
-  return sibling.state.dispatchedAt !== undefined && !isStale(sibling.state, now);
-}
-
-export function hasReviewInFlight(
-  siblings: readonly SiblingReview[],
-  now: number,
-): boolean {
-  return siblings.some((sibling) => reviewInFlight(sibling, now));
-}
-
-/**
- * Which deferred sibling — if any — may start its review now. At most one: the
- * thread released here latches its own review immediately, and that review's
- * idle drives the next release.
- */
-export function pickDeferredRelease(
-  siblings: readonly SiblingReview[],
-  now: number,
-): string | null {
-  if (hasReviewInFlight(siblings, now)) {
-    return null;
-  }
-  return siblings.find((s) => s.state.phase === "deferred")?.id ?? null;
+  return review.state.dispatchedAt !== undefined && !isStale(review.state, now);
 }

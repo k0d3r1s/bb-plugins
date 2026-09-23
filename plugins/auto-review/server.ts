@@ -15,6 +15,7 @@ import {
   addDeferral,
   readDeferrals,
   removeDeferral,
+  type Deferral,
 } from "./src/deferrals.js";
 import {
   authoredPaths,
@@ -26,14 +27,11 @@ import {
   mainlineBase,
 } from "./src/detect.js";
 import {
-  hasBusyCodingSibling,
-  hasReviewInFlight,
   isBusyStatus,
   passesThreadGate,
-  pickDeferredRelease,
+  reviewInFlight,
   selfIsWorktree,
   type GateThread,
-  type SiblingReview,
 } from "./src/gate.js";
 import { planApprovalOf, planGateAction, type PlanApproval } from "./src/plan.js";
 import {
@@ -41,6 +39,7 @@ import {
   buildReviewPrompt,
   renderScope,
 } from "./src/prompt.js";
+import { addReview, readReviews, removeReview } from "./src/reviews.js";
 import {
   isStale,
   PLAN_GATE_KEYS,
@@ -56,21 +55,22 @@ import {
 interface GateThreadLike extends GateThread {
   id: string;
   projectId: string;
+  providerId: string;
 }
 
-const envLocks = new Map<string, Promise<unknown>>();
+const providerLocks = new Map<string, Promise<unknown>>();
 
-function withEnvLock<T>(environmentId: string, run: () => Promise<T>): Promise<T> {
-  const previous = envLocks.get(environmentId) ?? Promise.resolve();
+function withProviderLock<T>(providerId: string, run: () => Promise<T>): Promise<T> {
+  const previous = providerLocks.get(providerId) ?? Promise.resolve();
   const next = previous.then(run, run);
   const settled = next.then(
     () => undefined,
     () => undefined,
   );
-  envLocks.set(environmentId, settled);
+  providerLocks.set(providerId, settled);
   void settled.then(() => {
-    if (envLocks.get(environmentId) === settled) {
-      envLocks.delete(environmentId);
+    if (providerLocks.get(providerId) === settled) {
+      providerLocks.delete(providerId);
     }
   });
   return next;
@@ -132,6 +132,7 @@ export default async function plugin(bb: BbPluginApi) {
       threadId: thread.id,
       projectId: thread.projectId,
       environmentId,
+      providerId: thread.providerId,
     });
     await writeState(bb, thread.id, {
       phase: "deferred",
@@ -146,24 +147,52 @@ export default async function plugin(bb: BbPluginApi) {
     );
   }
 
-  async function listEnvironment(environmentId: string) {
-    return bb.sdk.threads.list({ environmentId, includeHidden: true });
+  /**
+   * Whether a thread other than `exceptThreadId` has an auto-review queued or
+   * running on this provider, in any project. Index entries whose thread no
+   * longer holds a review — or no longer exists — are pruned on the way.
+   */
+  async function providerReviewInFlight(
+    providerId: string,
+    exceptThreadId: string | null,
+  ): Promise<boolean> {
+    const now = Date.now();
+    for (const entry of await readReviews(bb)) {
+      if (entry.threadId === exceptThreadId || entry.providerId !== providerId) {
+        continue;
+      }
+      let state: ThreadState;
+      let status: string;
+      try {
+        [state, { status }] = await Promise.all([
+          readState(bb, entry.threadId),
+          bb.sdk.threads.get({ threadId: entry.threadId }),
+        ]);
+      } catch {
+        await removeReview(bb, entry.threadId);
+        continue;
+      }
+      if (!REVIEW_IN_FLIGHT_PHASES.includes(state.phase)) {
+        await removeReview(bb, entry.threadId);
+        continue;
+      }
+      if (reviewInFlight({ state, busy: isBusyStatus(status) }, now)) {
+        return true;
+      }
+    }
+    return false;
   }
 
-  /** Every other thread in this environment, paired with its auto-review state. */
-  async function siblingReviews(
-    entries: Awaited<ReturnType<typeof listEnvironment>>,
-    selfThreadId: string,
-  ): Promise<SiblingReview[]> {
-    return Promise.all(
-      entries
-        .filter((entry) => entry.id !== selfThreadId)
-        .map(async (entry) => ({
-          id: entry.id,
-          state: await readState(bb, entry.id),
-          busy: isBusyStatus(entry.status),
-        })),
-    );
+  /** The provider a parked turn waits on; entries parked before it was indexed look it up. */
+  async function deferralProviderId(entry: Deferral): Promise<string | null> {
+    if (entry.providerId !== undefined) {
+      return entry.providerId;
+    }
+    try {
+      return (await bb.sdk.threads.get({ threadId: entry.threadId })).providerId;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -256,12 +285,14 @@ export default async function plugin(bb: BbPluginApi) {
     // staging, committing and merging in one working tree at once is the one
     // thing to avoid. Threads that are merely running, including this thread's
     // own advisor or subagents, never do.
-    const entries = await listEnvironment(environmentId);
-    if (hasReviewInFlight(await siblingReviews(entries, thread.id), Date.now())) {
+    if (await providerReviewInFlight(thread.providerId, thread.id)) {
       await deferTurn(thread, state, environmentId);
       return;
     }
-    const isWorktree = selfIsWorktree(entries, thread.id);
+    const isWorktree = selfIsWorktree(
+      await bb.sdk.threads.list({ environmentId, includeHidden: true }),
+      thread.id,
+    );
 
     const authored = await authoredPaths(bb, thread.id, state.turnStart.sinceSeq);
     if (authored.length === 0) {
@@ -282,11 +313,8 @@ export default async function plugin(bb: BbPluginApi) {
       mergeEligibleMainlines: config.mergeEligibleMainlines,
     });
 
-    await withEnvLock(environmentId, async () => {
-      const recheck = await listEnvironment(environmentId);
-      if (
-        hasReviewInFlight(await siblingReviews(recheck, thread.id), Date.now())
-      ) {
+    await withProviderLock(thread.providerId, async () => {
+      if (await providerReviewInFlight(thread.providerId, thread.id)) {
         await deferTurn(thread, state, environmentId, {
           commit: decision.commit,
           merge: decision.merge,
@@ -296,13 +324,11 @@ export default async function plugin(bb: BbPluginApi) {
         });
         return;
       }
-      const contended = hasBusyCodingSibling(recheck, thread.id);
 
       const prompt = buildReviewPrompt({
         decision,
         reviewMode: config.reviewMode,
         scope: renderScope(scope),
-        contended,
       });
       await writeState(
         bb,
@@ -310,6 +336,7 @@ export default async function plugin(bb: BbPluginApi) {
         { phase: "awaiting-review", dispatchedAt: Date.now() },
         ["pendingEntryId", "deferredSince"],
       );
+      await addReview(bb, { threadId: thread.id, providerId: thread.providerId });
       await removeDeferral(bb, thread.id);
       let result: Awaited<ReturnType<typeof bb.sdk.threads.send>>;
       try {
@@ -326,6 +353,7 @@ export default async function plugin(bb: BbPluginApi) {
         );
         const { set, remove } = resetToIdlePatch();
         await writeState(bb, thread.id, set, remove);
+        await removeReview(bb, thread.id);
         await recordFire(thread.projectId, thread.id, "stood-down", "send-failed", {
           commit: decision.commit,
           merge: decision.merge,
@@ -341,53 +369,45 @@ export default async function plugin(bb: BbPluginApi) {
           pendingEntryId: result.queuedMessage.id,
         });
       }
-      await recordFire(
-        thread.projectId,
-        thread.id,
-        "fired",
-        contended ? "contended" : "fired",
-        {
-          commit: decision.commit,
-          // A contended review never reaches the merge step, so do not record
-          // a merge it was told not to perform.
-          merge: decision.merge && !contended,
-          base,
-          isWorktree,
-          scopePaths: scope,
-        },
-      );
+      await recordFire(thread.projectId, thread.id, "fired", "fired", {
+        commit: decision.commit,
+        merge: decision.merge,
+        base,
+        isWorktree,
+        scopePaths: scope,
+      });
     });
   }
 
   /**
-   * A thread in this checkout just went idle — possibly ending the review that
-   * parked its siblings — so let one deferred sibling through. One per call:
-   * the released thread latches its own review immediately, and that review's
-   * idle drives the next release.
+   * A review on this provider may just have ended, so let one turn parked on
+   * the provider through — from any project. One review per call: the released
+   * turn latches its own review immediately, and that review's end drives the
+   * next release. A parked turn that turns out to start no review (nothing left
+   * to review, or unusable) does not end the call, or the turns behind it would
+   * wait for the sweep.
    */
-  async function releaseDeferred(self: GateThreadLike): Promise<void> {
-    const environmentId = self.environmentId;
-    if (environmentId === null) {
+  async function releaseDeferred(providerId: string): Promise<void> {
+    if (await providerReviewInFlight(providerId, null)) {
       return;
     }
-    // We may have just latched a review onto ourselves, in which case this
-    // environment is already spoken for.
-    const selfState = await readState(bb, self.id);
-    if (selfState.phase !== "idle") {
-      return;
+    for (const entry of await readDeferrals(bb)) {
+      if ((await deferralProviderId(entry)) !== providerId) {
+        continue;
+      }
+      if ((await readState(bb, entry.threadId)).phase !== "deferred") {
+        await removeDeferral(bb, entry.threadId);
+        continue;
+      }
+      await resolveAndEvaluate(entry.threadId, async (why) => {
+        bb.log.warn(
+          `auto-review: could not release deferred thread ${entry.threadId}: ${why}`,
+        );
+      });
+      if (await providerReviewInFlight(providerId, null)) {
+        return;
+      }
     }
-    const threadId = pickDeferredRelease(
-      await siblingReviews(await listEnvironment(environmentId), self.id),
-      Date.now(),
-    );
-    if (threadId === null) {
-      return;
-    }
-    await resolveAndEvaluate(threadId, async (why) => {
-      bb.log.warn(
-        `auto-review: could not release deferred thread ${threadId}: ${why}`,
-      );
-    });
   }
 
   async function handleIdle(thread: GateThreadLike): Promise<void> {
@@ -395,6 +415,7 @@ export default async function plugin(bb: BbPluginApi) {
     if (state.phase === "awaiting-review") {
       const { set, remove } = resetToIdlePatch();
       await writeState(bb, thread.id, set, remove);
+      await removeReview(bb, thread.id);
       return;
     }
     if (state.phase === "pending-dispatch") {
@@ -601,9 +622,9 @@ export default async function plugin(bb: BbPluginApi) {
       return;
     }
     await withThreadLock(thread.id, () => handleIdle(thread));
-    // Outside the thread lock, and outside evaluate's environment lock, so
-    // releasing a sibling cannot deadlock against the work we just did.
-    await releaseDeferred(thread);
+    // Outside the thread lock, and outside evaluate's provider lock, so
+    // releasing another turn cannot deadlock against the work we just did.
+    await releaseDeferred(thread.providerId);
   });
 
   bb.events.on("message.dispatched", async ({ entry }) => {
@@ -627,12 +648,12 @@ export default async function plugin(bb: BbPluginApi) {
   });
 
   bb.events.on("message.cancelled", async ({ entry }) => {
-    await withThreadLock(entry.threadId, async () => {
+    const cancelledReview = await withThreadLock(entry.threadId, async () => {
       const state = await readState(bb, entry.threadId);
       if (state.planReviewEntryId === entry.id) {
         // The review never ran, so the next plan still owes one.
         await writeState(bb, entry.threadId, {}, [...PLAN_GATE_KEYS]);
-        return;
+        return false;
       }
       if (
         state.phase === "pending-dispatch" &&
@@ -640,8 +661,15 @@ export default async function plugin(bb: BbPluginApi) {
       ) {
         const { set, remove } = resetToIdlePatch();
         await writeState(bb, entry.threadId, set, remove);
+        await removeReview(bb, entry.threadId);
+        return true;
       }
+      return false;
     });
+    if (cancelledReview) {
+      const { providerId } = await bb.sdk.threads.get({ threadId: entry.threadId });
+      await releaseDeferred(providerId);
+    }
   });
 
   const unlatch = (threadId: string) =>
@@ -652,14 +680,15 @@ export default async function plugin(bb: BbPluginApi) {
         await writeState(bb, threadId, set, remove);
       }
       await removeDeferral(bb, threadId);
+      await removeReview(bb, threadId);
     });
 
   /**
    * The backstop for a release no event delivered. The review that parked a
    * turn normally releases it from its own idle, but that idle can be missed —
-   * a restart, or a blocker that failed, was deleted, or left a stale latch
-   * behind. Each pass retries every parked turn whose checkout no longer has a
-   * review in flight.
+   * a restart, or a blocker that was deleted or left a stale latch behind.
+   * Each pass retries every parked turn whose provider no longer has a review
+   * in flight.
    */
   async function sweepDeferrals(): Promise<void> {
     for (const entry of await readDeferrals(bb)) {
@@ -669,17 +698,15 @@ export default async function plugin(bb: BbPluginApi) {
         continue;
       }
       // Same veto `releaseDeferred` applies, and it is what keeps this loop to
-      // one release per checkout: `evaluate` latches `awaiting-review` before
-      // it sends, so a second entry in the same environment sees the first
-      // thread's review in flight and waits for the next pass.
+      // one release per provider: `evaluate` indexes its review before it
+      // sends, so a second entry on the same provider sees the first thread's
+      // review in flight and waits for the next pass. A provider that cannot
+      // be resolved means the thread is gone, which `resolveAndEvaluate`
+      // reports as unusable.
+      const providerId = await deferralProviderId(entry);
       if (
-        hasReviewInFlight(
-          await siblingReviews(
-            await listEnvironment(entry.environmentId),
-            entry.threadId,
-          ),
-          Date.now(),
-        )
+        providerId !== null &&
+        (await providerReviewInFlight(providerId, entry.threadId))
       ) {
         continue;
       }
@@ -699,18 +726,19 @@ export default async function plugin(bb: BbPluginApi) {
 
   bb.background.schedule("sweep-deferrals", "*/5 * * * *", sweepDeferrals);
 
-  // A failed or archived thread may have been the review a sibling was parked
-  // behind, and it will not go idle to release it.
+  // A failed, archived or deleted thread may have been the review a turn was
+  // parked behind, and it will not go idle to release it.
   bb.events.on("thread.failed", async ({ thread }) => {
     await unlatch(thread.id);
-    await releaseDeferred(thread);
+    await releaseDeferred(thread.providerId);
   });
   bb.events.on("thread.archived", async ({ thread }) => {
     await unlatch(thread.id);
-    await releaseDeferred(thread);
+    await releaseDeferred(thread.providerId);
   });
   bb.events.on("thread.deleted", async ({ thread }) => {
     await unlatch(thread.id);
+    await releaseDeferred(thread.providerId);
   });
 
   registerAutoReviewCli(bb, settings, () => globals);
