@@ -2671,10 +2671,11 @@ test("thread read normalizes lookup failures to authorization denial", async () 
   );
 });
 
-test("policy loading verifies the protected policy descriptor", async () => {
+test("policy loading verifies the protected policy descriptor", async (t) => {
   const fixtureRoot = await realpath(
     await mkdtemp(path.join(tmpdir(), "shared-runtime-policy-")),
   );
+  t.after(() => rm(fixtureRoot, { recursive: true, force: true }));
   const runtimeRoot = path.join(fixtureRoot, "runtime");
   const projectsRoot = path.join(runtimeRoot, "projects");
   const policyPath = path.join(projectsRoot, "proj_platform.json");
@@ -2805,11 +2806,12 @@ test("policy loading verifies the protected policy descriptor", async () => {
   );
 });
 
-test("policy loading rejects symlinked and hard-linked trust anchors", async () => {
+test("policy loading rejects symlinked and hard-linked trust anchors", async (t) => {
   for (const linkType of ["symlink", "hardlink"]) {
     const fixtureRoot = await realpath(
       await mkdtemp(path.join(tmpdir(), `shared-runtime-policy-${linkType}-`)),
     );
+    t.after(() => rm(fixtureRoot, { recursive: true, force: true }));
     const runtimeRoot = path.join(fixtureRoot, "runtime");
     const projectsRoot = path.join(runtimeRoot, "projects");
     const outsidePolicy = path.join(fixtureRoot, "outside-policy.json");
@@ -2831,6 +2833,7 @@ test("policy loading rejects symlinked and hard-linked trust anchors", async () 
   const looseRoot = await realpath(
     await mkdtemp(path.join(tmpdir(), "shared-runtime-policy-loose-")),
   );
+  t.after(() => rm(looseRoot, { recursive: true, force: true }));
   const looseProjects = path.join(looseRoot, "projects");
   await mkdir(looseProjects, { recursive: true, mode: 0o755 });
   await chmod(looseProjects, 0o755);

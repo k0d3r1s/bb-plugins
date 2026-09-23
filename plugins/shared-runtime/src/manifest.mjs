@@ -732,7 +732,9 @@ export function describeOperations(manifest) {
     const operation = manifest.operations[name];
     if (operation.kind === "sequence") {
       const parts = operation.steps.map((step) =>
-        step.reference !== undefined ? step.reference : `${step.kind}:${step.argv?.[0] ?? step.script}`,
+        step.reference !== undefined
+          ? step.reference
+          : `${step.kind}:${step.kind === "host" ? step.script : step.argv[0]}`,
       );
       return `${name} (sequence: ${parts.join(", ")})`;
     }
