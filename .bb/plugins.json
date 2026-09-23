@@ -3,6 +3,7 @@
   "schemaVersion": 1,
   "name": "lettland-plugins",
   "plugins": [
+    { "name": "agent-hooks", "source": "./plugins/agent-hooks" },
     { "name": "auto-review", "source": "./plugins/auto-review" },
     { "name": "devkit", "source": "./plugins/devkit" },
     { "name": "dir-skills", "source": "./plugins/dir-skills" },

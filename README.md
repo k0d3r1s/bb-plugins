@@ -11,10 +11,11 @@ The root [`.bb/plugins.json`](.bb/plugins.json) collection manifest indexes them
 
 | Plugin | ID | npm |
 |---|---|---|
-| Auto review | `auto-review` | `@lettland/bb-plugin-auto-review` |
-| devkit | `devkit` | `@lettland/bb-plugin-devkit` |
-| Directory skills | `dir-skills` | `@lettland/bb-plugin-dir-skills` |
-| Shared Runtime | `shared-runtime` | `@lettland/bb-plugin-shared-runtime` |
+| [Agent hooks](plugins/agent-hooks) | `agent-hooks` | `@lettland/bb-plugin-agent-hooks` |
+| [Auto review](plugins/auto-review) | `auto-review` | `@lettland/bb-plugin-auto-review` |
+| [devkit](plugins/devkit) | `devkit` | `@lettland/bb-plugin-devkit` |
+| [Directory skills](plugins/dir-skills) | `dir-skills` | `@lettland/bb-plugin-dir-skills` |
+| [Shared Runtime](plugins/shared-runtime) | `shared-runtime` | `@lettland/bb-plugin-shared-runtime` |
 
 ## Install a plugin
 
