@@ -176,6 +176,40 @@ describe("buildReviewPrompt", () => {
     expect(text).toMatch(/do not fall back to a self-review/);
   });
 
+  it("reviews the committed range when the turn already committed its work", () => {
+    const build = (reviewMode: "auto" | "devkit" | "self") =>
+      buildReviewPrompt({
+        decision: { commit: true, merge: false },
+        reviewMode,
+        scope: baseScope,
+        committedSince: "0123abcd",
+      });
+    for (const mode of ["auto", "devkit"] as const) {
+      expect(build(mode)).toContain("scope `impl 0123abcd..HEAD`");
+    }
+    expect(build("self")).toContain("`git diff 0123abcd`");
+    expect(build("auto")).toContain("Do not amend, squash, reset, or otherwise rewrite");
+    expect(build("auto")).not.toContain("(the uncommitted changes)");
+    expect(build("auto")).toMatch(
+      /4\. Scan the staged changes[^\n]*Scan this turn's commits too \(`git diff 0123abcd\.\.HEAD`\)[^\n]*do not rewrite history/u,
+    );
+  });
+
+  it("never renders a committed range from something that is not a commit sha", () => {
+    for (const committedSince of ["main; echo pwned", "HEAD~1", null]) {
+      const text = buildReviewPrompt({
+        decision: { commit: true, merge: false },
+        reviewMode: "auto",
+        scope: baseScope,
+        committedSince,
+      });
+      expect(text).toContain("scope `code` (the uncommitted changes)");
+      expect(text).not.toContain("impl ");
+      expect(text).not.toContain("Do not amend");
+      expect(text).not.toContain("Scan this turn's commits");
+    }
+  });
+
   it("points auto mode at the devkit tool, never at a slash command", () => {
     const text = buildReviewPrompt({
       decision: { commit: true, merge: false },

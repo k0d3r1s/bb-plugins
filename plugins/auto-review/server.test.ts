@@ -45,6 +45,9 @@ interface HostOptions {
   checkoutKind?: string;
   /** Threads that `get` reports hidden, so they no longer pass the thread gate. */
   hiddenThreads?: string[];
+  /** The checkout is the mainline itself, so nothing is ever ahead of a base. */
+  onMainline?: boolean;
+  headSha?: string;
 }
 
 interface TreeFile {
@@ -73,6 +76,31 @@ function fileChangeRow(path: string, sourceSeqStart = 150): unknown {
   };
 }
 
+/**
+ * The merge base `status` reports. On the mainline there is none unless the
+ * caller names a ref to compare from; then it is the commits made after it.
+ */
+function fakeMergeBase(
+  commits: readonly TreeCommit[],
+  startHead: string,
+  onMainline: boolean,
+  ref: string | undefined,
+) {
+  if (onMainline && ref === undefined) {
+    return null;
+  }
+  const since =
+    ref === undefined || ref === startHead
+      ? commits
+      : commits.slice(commits.findIndex((commit) => commit.sha === ref) + 1);
+  return {
+    files: since.flatMap((commit) => commit.paths.map((path) => ({ path, status: "M" }))),
+    commits: since.map((commit) => ({ sha: commit.sha })),
+    mergeBaseBranch: ref ?? "master",
+    baseRef: "abc123",
+  };
+}
+
 function createHost(options: HostOptions = {}) {
   const metadataByThread = new Map<string, Record<string, unknown>>();
   const bucket = (threadId: string): Record<string, unknown> => {
@@ -94,7 +122,10 @@ function createHost(options: HostOptions = {}) {
   let workingTreeFiles: TreeFile[] = options.workingTreeFiles ?? [
     { path: "src/a.ts" },
   ];
-  let headSha = "head-0";
+  let headSha = options.headSha ?? "head-0";
+  const startHead = headSha;
+  const onMainline = options.onMainline === true;
+  const branchName = onMainline ? "master" : "bb/feature";
   let commits: TreeCommit[] = [];
   let siblingRows: Record<string, unknown[]> = {};
   const worktree = options.worktree ?? true;
@@ -207,7 +238,7 @@ function createHost(options: HostOptions = {}) {
       },
     },
     environments: {
-      status: async () =>
+      status: async (args: { mergeBaseBranch?: string }) =>
         options.statusUnavailable === true
           ? { outcome: "unavailable" }
           : ({
@@ -221,20 +252,13 @@ function createHost(options: HostOptions = {}) {
                     ...file,
                   })),
                 },
-                branch: { currentBranch: "bb/feature", defaultBranch: "master" },
+                branch: { currentBranch: branchName, defaultBranch: "master" },
                 checkout: {
                   kind: options.checkoutKind ?? "branch",
-                  branchName: "bb/feature",
+                  branchName,
                   headSha,
                 },
-                mergeBase: {
-                  files: commits.flatMap((commit) =>
-                    commit.paths.map((path) => ({ path, status: "M" })),
-                  ),
-                  commits: commits.map((commit) => ({ sha: commit.sha })),
-                  mergeBaseBranch: "master",
-                  baseRef: "abc123",
-                },
+                mergeBase: fakeMergeBase(commits, startHead, onMainline, args.mergeBaseBranch),
               },
           }),
       diffFile: async (args: { path: string }) => {
@@ -533,6 +557,40 @@ describe("auto-review plugin", () => {
       outcome: "fired",
       scopePaths: ["src/committed.ts"],
     });
+    await host.harness.dispose();
+  });
+
+  it("reviews work the turn committed straight onto the mainline", async () => {
+    const host = createHost({
+      onMainline: true,
+      headSha: "0123abc",
+      authoredRows: [fileChangeRow("src/a.ts")],
+      workingTreeFiles: [],
+    });
+    await plugin(host.bb);
+    await emitActive(host);
+    host.commit("4567def", ["src/a.ts", "src/shell.ts"]);
+    await emitIdle(host);
+    expect(await lastFire(host)).toMatchObject({
+      outcome: "fired",
+      commit: true,
+      merge: false,
+      scopePaths: ["src/a.ts", "src/shell.ts"],
+    });
+    const text = JSON.stringify(host.sends[0]?.input);
+    expect(text).toContain("impl 0123abc..HEAD");
+    expect(text).toContain("Do not amend");
+    await host.harness.dispose();
+  });
+
+  it("does not claim mainline commits made before the turn", async () => {
+    const host = createHost({ onMainline: true, authoredRows: [], workingTreeFiles: [] });
+    await plugin(host.bb);
+    host.commit("c0", ["src/earlier.ts"]);
+    await emitActive(host);
+    await emitIdle(host);
+    expect(host.sends).toHaveLength(0);
+    expect(await lastFire(host)).toMatchObject({ reason: "no-authorship" });
     await host.harness.dispose();
   });
 

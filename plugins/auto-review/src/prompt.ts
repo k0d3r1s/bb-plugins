@@ -34,6 +34,11 @@ export interface BuildPromptInput {
   decision: Decision;
   reviewMode: ReviewMode;
   scope: ScopeRendering;
+  /**
+   * The head the turn started from, when the turn committed work itself.
+   * Anything not shaped like a commit sha is ignored.
+   */
+  committedSince?: string | null;
 }
 
 const SECRET_PATTERNS = [
@@ -58,15 +63,37 @@ function devkitReview(scope: string): string {
   return `call \`devkit_load_skill({ slug: "review-code" })\` and follow that workflow with scope \`${scope}\``;
 }
 
-function reviewStep(mode: ReviewMode): string {
+/** A commit sha, the only shape a committed range is ever rendered from. */
+export const COMMIT_SHA_ALLOW = /^[0-9a-f]{7,64}$/u;
+
+/**
+ * What the review covers. Work the turn already committed is not in the
+ * uncommitted diff, so the range from the turn-start head covers it instead —
+ * `git diff <sha>` shows that range plus whatever is still uncommitted.
+ */
+function reviewTarget(committedSince: string | null): { devkit: string; self: string } {
+  if (committedSince === null) {
+    return {
+      devkit: `${devkitReview("code")} (the uncommitted changes)`,
+      self: "the diff you produced this turn",
+    };
+  }
+  return {
+    devkit: `${devkitReview(`impl ${committedSince}..HEAD`)}, and include the uncommitted changes too (\`git diff ${committedSince}\` shows both)`,
+    self: `the diff you produced this turn, committed and uncommitted (\`git diff ${committedSince}\`)`,
+  };
+}
+
+function reviewStep(mode: ReviewMode, committedSince: string | null): string {
+  const target = reviewTarget(committedSince);
   switch (mode) {
     case "devkit":
-      return `Review the changes with devkit's calibrated review: ${devkitReview("code")} (the uncommitted changes). If the devkit_load_skill tool is not available, STOP and report that the devkit review workflow is missing; do not fall back to a self-review.`;
+      return `Review the changes with devkit's calibrated review: ${target.devkit}. If the devkit_load_skill tool is not available, STOP and report that the devkit review workflow is missing; do not fall back to a self-review.`;
     case "self":
-      return "Review the changes with a focused self-review of the diff you produced this turn.";
+      return `Review the changes with a focused self-review of ${target.self}.`;
     case "auto":
     default:
-      return `Review the changes: if the devkit_load_skill tool is available, ${devkitReview("code")} (the uncommitted changes); otherwise do a focused self-review of the diff you produced this turn.`;
+      return `Review the changes: if the devkit_load_skill tool is available, ${target.devkit}; otherwise do a focused self-review of ${target.self}.`;
   }
 }
 
@@ -126,12 +153,20 @@ export function buildPlanReviewPrompt(input: BuildPlanPromptInput): string {
 
 export function buildReviewPrompt(input: BuildPromptInput): string {
   const { decision, reviewMode, scope } = input;
+  const since = input.committedSince ?? null;
+  const committedSince = since !== null && COMMIT_SHA_ALLOW.test(since) ? since : null;
   const lines: string[] = [];
   lines.push(
     `${AUTO_REVIEW_MARKER} You changed files during your last turn. Review them, apply fixes, and record the result. Follow these steps in order.`,
   );
   lines.push("");
-  lines.push(`1. ${reviewStep(reviewMode)}`);
+  if (committedSince !== null) {
+    lines.push(
+      `Part of this turn's work is already committed (the commits after ${committedSince}). Do not amend, squash, reset, or otherwise rewrite those commits: record the review's fixes as new changes. If the review calls for no fixes, there is nothing to stage or commit.`,
+    );
+    lines.push("");
+  }
+  lines.push(`1. ${reviewStep(reviewMode, committedSince)}`);
   lines.push("2. Apply the fixes the review reports. Re-run the review if it asks you to.");
 
   const scopeBlock =
@@ -160,8 +195,12 @@ export function buildReviewPrompt(input: BuildPromptInput): string {
   lines.push(
     "   Before staging each file, confirm its current contents are the changes you made this turn; if a file also contains edits you did not make (a concurrent human or sibling edit), skip it and report it rather than committing someone else's work.",
   );
+  const committedScan =
+    committedSince === null
+      ? ""
+      : ` Scan this turn's commits too (\`git diff ${committedSince}..HEAD\`); a secret found there is already committed, so STOP and report it — do not rewrite history to remove it.`;
   lines.push(
-    `4. Scan the staged changes for secrets, credentials, or build artifacts before committing. Watch for: ${SECRET_PATTERNS.join("; ")}. If you find any, STOP: unstage, do not commit, and report what you found. Do not commit past a secret.`,
+    `4. Scan the staged changes for secrets, credentials, or build artifacts before committing. Watch for: ${SECRET_PATTERNS.join("; ")}. If you find any, STOP: unstage, do not commit, and report what you found. Do not commit past a secret.${committedScan}`,
   );
 
   if (decision.commit) {

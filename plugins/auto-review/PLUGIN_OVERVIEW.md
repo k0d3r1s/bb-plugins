@@ -13,8 +13,9 @@ one provider-neutral implementation driven by bb's `thread.idle` event.
   after the turn's start cursor, plus whatever the working tree shows changed since the
   turn started (a fingerprint per uncommitted path and the commits ahead of the base,
   snapshotted on `thread.active`) — so shell redirects, `sed -i`, scripts and generators
-  count too, as do shell commits on a branch ahead of its base (a commit straight onto the
-  mainline leaves nothing ahead, so nothing to review). A path another thread in the same
+  count too, as do commits the turn made — on a branch ahead of its base, or straight onto
+  the mainline (read back from the turn-start head); the review then covers the committed
+  range and records its fixes as new commits. A path another thread in the same
   checkout changed through its own tools during the turn is left to that thread; files
   already dirty and left untouched are never claimed; untracked files appearing under
   harness state dirs (`.claude/`, `.codex/`, `.bb/` — edit backups, logs) are harness

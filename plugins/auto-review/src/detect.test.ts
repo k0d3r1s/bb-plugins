@@ -134,6 +134,11 @@ describe("dirtyOrAheadPaths", () => {
     const ws = workspace({ workingTree: { files: [{ path: "w.ts" }] } });
     expect([...dirtyOrAheadPaths(ws)]).toEqual(["w.ts"]);
   });
+
+  it("counts paths committed during the turn, which a mainline never shows ahead", () => {
+    const ws = workspace({ workingTree: { files: [{ path: "w.ts" }] } });
+    expect([...dirtyOrAheadPaths(ws, ["c.ts"])].sort()).toEqual(["c.ts", "w.ts"]);
+  });
 });
 
 describe("mainlineBase", () => {
@@ -306,7 +311,9 @@ describe("treeChangedPaths and siblingAuthoredPaths", () => {
       ["c1"],
     );
     const changed = await treeChangedPaths(bb, "env", before, current);
-    expect(changed.sort()).toEqual(["committed.ts", "edited.ts", "new.ts"]);
+    expect(changed.paths.sort()).toEqual(["committed.ts", "edited.ts", "new.ts"]);
+    expect(changed.commits).toEqual(["c1"]);
+    expect(changed.committedPaths).toEqual(["committed.ts"]);
   });
 
   it("leaves untracked harness output out of the snapshot but keeps tracked harness files", async () => {
@@ -390,7 +397,7 @@ describe("treeChangedPaths and siblingAuthoredPaths", () => {
 
 describe("workspace capture edge cases", () => {
   interface Env {
-    status?: () => Promise<unknown>;
+    status?: (args?: Record<string, unknown>) => Promise<unknown>;
     diffFile?: (args: { path: string }) => Promise<unknown>;
     diffFiles?: (args: { sha: string }) => Promise<unknown>;
     timeline?: (args: Record<string, unknown>) => Promise<unknown>;
@@ -575,7 +582,7 @@ describe("workspace capture edge cases", () => {
         before,
         ws({ workingTree: { files: [tracked("a.ts", "M", 5)] } }),
       );
-      expect(changed).toEqual(["a.ts"]);
+      expect(changed.paths).toEqual(["a.ts"]);
       expect(diffFileCalls).toEqual([]);
     });
 
@@ -588,7 +595,7 @@ describe("workspace capture edge cases", () => {
         before,
         ws({ workingTree: { files: [tracked("a.ts")] } }),
       );
-      expect(changed).toEqual([]);
+      expect(changed.paths).toEqual([]);
       expect(diffFileCalls).toEqual([]);
     });
 
@@ -609,7 +616,7 @@ describe("workspace capture edge cases", () => {
           mergeBase: { files: [], commits: [{ sha: "c1" }] },
         }),
       );
-      expect(changed.sort()).toEqual(["new.ts", "old.ts"]);
+      expect(changed.paths.sort()).toEqual(["new.ts", "old.ts"]);
     });
 
     it("skips a commit it cannot read and still counts the others", async () => {
@@ -637,7 +644,7 @@ describe("workspace capture edge cases", () => {
           },
         }),
       );
-      expect(changed).toEqual(["good.ts"]);
+      expect(changed.paths).toEqual(["good.ts"]);
       // A commit already ahead at turn start is not the turn's work.
       expect(diffFilesCalls.sort()).toEqual(["bad", "gone", "good"]);
     });
@@ -654,8 +661,21 @@ describe("workspace capture edge cases", () => {
       expect(diffFilesCalls).toEqual([]);
     });
 
-    it("tolerates a moved head with no merge base", async () => {
-      const { bb, diffFilesCalls } = fakeBb({});
+    it("reads commits made straight onto the mainline from the turn-start head", async () => {
+      const statusCalls: Array<Record<string, unknown>> = [];
+      const { bb, diffFilesCalls } = fakeBb({
+        status: async (args?: Record<string, unknown>) => {
+          statusCalls.push(args ?? {});
+          return {
+            outcome: "available",
+            workspace: ws({ mergeBase: { files: [], commits: [{ sha: "h1" }] } }),
+          };
+        },
+        diffFiles: async ({ sha }) => ({
+          outcome: "available",
+          files: [{ path: `${sha}.ts`, previousPath: null }],
+        }),
+      });
       const before = { headSha: "h0", files: {}, commits: [] };
       const changed = await treeChangedPaths(
         bb,
@@ -663,8 +683,48 @@ describe("workspace capture edge cases", () => {
         before,
         ws({ checkout: { kind: "branch", headSha: "h1" }, mergeBase: null }),
       );
-      expect(changed).toEqual([]);
-      expect(diffFilesCalls).toEqual([]);
+      expect(statusCalls).toEqual([{ environmentId: "env", mergeBaseBranch: "h0" }]);
+      expect(diffFilesCalls).toEqual(["h1"]);
+      expect(changed).toEqual({ paths: ["h1.ts"], commits: ["h1"], committedPaths: ["h1.ts"] });
+    });
+
+    it("tolerates a moved mainline head whose turn-start head cannot be compared", async () => {
+      for (const status of [
+        async () => ({ outcome: "unavailable" }),
+        async () => {
+          throw new Error("unknown revision");
+        },
+      ]) {
+        const { bb, diffFilesCalls } = fakeBb({ status });
+        const before = { headSha: "h0", files: {}, commits: [] };
+        const changed = await treeChangedPaths(
+          bb,
+          "env",
+          before,
+          ws({ checkout: { kind: "branch", headSha: "h1" }, mergeBase: null }),
+        );
+        expect(changed.paths).toEqual([]);
+        expect(diffFilesCalls).toEqual([]);
+      }
+    });
+
+    it("has no turn-start head to compare from on an unborn branch", async () => {
+      const statusCalls: unknown[] = [];
+      const { bb } = fakeBb({
+        status: async () => {
+          statusCalls.push(1);
+          return { outcome: "unavailable" };
+        },
+      });
+      const before = { headSha: null, files: {}, commits: [] };
+      const changed = await treeChangedPaths(
+        bb,
+        "env",
+        before,
+        ws({ checkout: { kind: "branch", headSha: "h1" }, mergeBase: null }),
+      );
+      expect(changed.commits).toEqual([]);
+      expect(statusCalls).toEqual([]);
     });
   });
 
@@ -793,7 +853,7 @@ describe("workspace capture edge cases", () => {
         workspace: ws({ workingTree: { files: [tracked("shell.ts")] } }),
         threadEntries: [],
       });
-      expect(paths).toEqual(["own.ts"]);
+      expect(paths).toEqual({ paths: ["own.ts"], commits: [], committedPaths: [] });
       expect(diffFileCalls).toEqual([]);
     });
 
@@ -815,8 +875,50 @@ describe("workspace capture edge cases", () => {
           { id: "sib", parentThreadId: null, lifecycleOwnerThreadId: null, deletedAt: null, status: "active", updatedAt: 3_000 },
         ] as never,
       });
-      expect(paths).toEqual(["own.ts"]);
+      expect(paths.paths).toEqual(["own.ts"]);
       expect(timelineCalls.map((call) => call.threadId)).toEqual(["self"]);
+    });
+
+    it("leaves a sibling's committed path to the sibling but keeps its own", async () => {
+      const { bb } = fakeBb({
+        timeline: async ({ threadId }) =>
+          threadId === "sib"
+            ? {
+                rows: [
+                  {
+                    kind: "work",
+                    workKind: "file-change",
+                    sourceSeqStart: 1,
+                    createdAt: 2_000,
+                    change: { path: "sib.ts", movePath: null },
+                  },
+                ],
+                maxSeq: 0,
+                timelinePage: { hasOlderRows: false, olderCursor: null },
+              }
+            : ownRows(["own.ts"]),
+        diffFiles: async () => ({
+          outcome: "available",
+          files: ["own.ts", "sib.ts", "shell.ts"].map((path) => ({ path, previousPath: null })),
+        }),
+      });
+      const changes = await turnChangedPaths(bb, {
+        threadId: "self",
+        environmentId: "env",
+        turnStart: { sinceSeq: 0, startedAt: 1_000, tree: { headSha: "h0", files: {}, commits: [] } },
+        workspace: ws({
+          checkout: { kind: "branch", headSha: "c1" },
+          mergeBase: { files: [], commits: [{ sha: "c1" }] },
+        }),
+        threadEntries: [
+          { id: "sib", parentThreadId: null, lifecycleOwnerThreadId: null, deletedAt: null, status: "active", updatedAt: 3_000 },
+        ] as never,
+      });
+      expect(changes).toEqual({
+        paths: ["own.ts", "shell.ts"],
+        commits: ["c1"],
+        committedPaths: ["own.ts", "shell.ts"],
+      });
     });
 
     it("claims unattributed tree changes outright when the turn start time is unknown", async () => {
@@ -830,7 +932,7 @@ describe("workspace capture edge cases", () => {
           { id: "sib", parentThreadId: null, lifecycleOwnerThreadId: null, deletedAt: null, status: "active", updatedAt: 3_000 },
         ] as never,
       });
-      expect(paths).toEqual(["shell.ts"]);
+      expect(paths.paths).toEqual(["shell.ts"]);
       expect(timelineCalls.map((call) => call.threadId)).toEqual(["self"]);
     });
   });

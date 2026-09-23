@@ -296,18 +296,21 @@ export default async function plugin(bb: BbPluginApi) {
     });
     const isWorktree = selfIsWorktree(threadEntries, thread.id);
 
-    const authored = await turnChangedPaths(bb, {
+    const turn = await turnChangedPaths(bb, {
       threadId: thread.id,
       environmentId,
       turnStart: state.turnStart,
       workspace,
       threadEntries,
     });
-    if (authored.length === 0) {
+    if (turn.paths.length === 0) {
       await standDown(thread, state, "no-authorship");
       return;
     }
-    const scope = computeScope(authored, dirtyOrAheadPaths(workspace));
+    const scope = computeScope(
+      turn.paths,
+      dirtyOrAheadPaths(workspace, turn.committedPaths),
+    );
     if (scope.length === 0) {
       await standDown(thread, state, "empty-scope");
       return;
@@ -337,6 +340,8 @@ export default async function plugin(bb: BbPluginApi) {
         decision,
         reviewMode: config.reviewMode,
         scope: renderScope(scope),
+        committedSince:
+          turn.commits.length > 0 ? (state.turnStart?.tree?.headSha ?? null) : null,
       });
       await writeState(
         bb,

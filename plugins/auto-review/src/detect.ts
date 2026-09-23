@@ -284,6 +284,50 @@ async function commitPaths(
 }
 
 /**
+ * Commits made during the turn: the head moved off `before.headSha`. On a
+ * branch ahead of its base they are the commits ahead that were not ahead at
+ * turn start. On the mainline itself there is no base to be ahead of, so the
+ * turn-start head serves as one — otherwise every commit made straight onto
+ * the mainline would go unseen.
+ */
+export async function turnCommits(
+  bb: BbPluginApi,
+  environmentId: string,
+  before: TreeSnapshot,
+  workspace: AvailableWorkspace,
+): Promise<string[]> {
+  if (headShaOf(workspace) === before.headSha) {
+    return [];
+  }
+  let commits: readonly { sha: string }[] = [];
+  if (workspace.mergeBase !== null) {
+    const known = new Set(before.commits);
+    commits = workspace.mergeBase.commits.filter((commit) => !known.has(commit.sha));
+  } else if (before.headSha !== null) {
+    try {
+      const since = await bb.sdk.environments.status({
+        environmentId,
+        mergeBaseBranch: before.headSha,
+      });
+      commits =
+        since.outcome === "available" ? (since.workspace.mergeBase?.commits ?? []) : [];
+    } catch {
+      commits = [];
+    }
+  }
+  return commits.slice(0, MAX_NEW_COMMITS).map((commit) => commit.sha);
+}
+
+export interface TreeChanges {
+  /** Every changed path, committed ones included. */
+  paths: string[];
+  /** Commits made during the turn. */
+  commits: string[];
+  /** Paths those commits touched. */
+  committedPaths: string[];
+}
+
+/**
  * Paths the working tree shows changed since `before`, however they changed:
  * newly uncommitted, uncommitted with different content, or touched by a
  * commit made during the turn.
@@ -293,7 +337,7 @@ export async function treeChangedPaths(
   environmentId: string,
   before: TreeSnapshot,
   workspace: AvailableWorkspace,
-): Promise<string[]> {
+): Promise<TreeChanges> {
   const changed = new Set<string>();
   const recheck: Array<{ file: WorkingTreeFile; prior: string }> = [];
   for (const file of workspace.workingTree.files) {
@@ -313,19 +357,15 @@ export async function treeChangedPaths(
     }
   });
 
-  if (headShaOf(workspace) !== before.headSha) {
-    const known = new Set(before.commits);
-    const fresh = (workspace.mergeBase?.commits ?? [])
-      .filter((commit) => !known.has(commit.sha))
-      .slice(0, MAX_NEW_COMMITS);
-    const perCommit = await mapLimit(fresh, HASH_CONCURRENCY, (commit) =>
-      commitPaths(bb, environmentId, commit.sha),
-    );
-    for (const path of perCommit.flat()) {
-      changed.add(path);
-    }
+  const commits = await turnCommits(bb, environmentId, before, workspace);
+  const perCommit = await mapLimit(commits, HASH_CONCURRENCY, (sha) =>
+    commitPaths(bb, environmentId, sha),
+  );
+  const committedPaths = [...new Set(perCommit.flat())];
+  for (const path of committedPaths) {
+    changed.add(path);
   }
-  return [...changed];
+  return { paths: [...changed], commits, committedPaths };
 }
 
 /** This thread plus every thread it spawned or owns, transitively. */
@@ -430,6 +470,15 @@ export interface TurnChangeInput {
   threadEntries: readonly ThreadListEntry[];
 }
 
+export interface TurnChanges {
+  /** Every path this turn changed. */
+  paths: string[];
+  /** Commits the turn made; their diff is the turn's work too. */
+  commits: string[];
+  /** The subset of `paths` those commits touched. */
+  committedPaths: string[];
+}
+
 /**
  * Every path this turn changed. The thread's own `file-change` rows always
  * count. On top of them, whatever the working tree shows changed since turn
@@ -440,24 +489,22 @@ export interface TurnChangeInput {
 export async function turnChangedPaths(
   bb: BbPluginApi,
   input: TurnChangeInput,
-): Promise<string[]> {
+): Promise<TurnChanges> {
   const { threadId, environmentId, turnStart, workspace } = input;
   const own = await authoredPaths(bb, threadId, turnStart.sinceSeq);
   if (turnStart.tree === undefined) {
-    return own;
+    return { paths: own, commits: [], committedPaths: [] };
   }
   const ownSet = new Set(own);
   const harnessOutput = new Set(
     workspace.workingTree.files.filter(isHarnessOutput).map((file) => file.path),
   );
-  const unattributed = (
-    await treeChangedPaths(bb, environmentId, turnStart.tree, workspace)
-  ).filter((path) => !ownSet.has(path) && !harnessOutput.has(path));
-  if (unattributed.length === 0) {
-    return own;
-  }
+  const tree = await treeChangedPaths(bb, environmentId, turnStart.tree, workspace);
+  const unattributed = tree.paths.filter(
+    (path) => !ownSet.has(path) && !harnessOutput.has(path),
+  );
   const foreign =
-    turnStart.startedAt === undefined
+    unattributed.length === 0 || turnStart.startedAt === undefined
       ? new Set<string>()
       : await siblingAuthoredPaths(
           bb,
@@ -465,11 +512,24 @@ export async function turnChangedPaths(
           threadId,
           turnStart.startedAt,
         );
-  return [...own, ...unattributed.filter((path) => !foreign.has(path))];
+  const ours = (path: string) => ownSet.has(path) || !foreign.has(path);
+  return {
+    paths: [...own, ...unattributed.filter(ours)],
+    commits: tree.commits,
+    committedPaths: tree.committedPaths.filter(ours),
+  };
 }
 
-export function dirtyOrAheadPaths(workspace: AvailableWorkspace): Set<string> {
-  const paths = new Set<string>();
+/**
+ * Paths with something left to review: uncommitted, ahead of the base, or
+ * committed during the turn — on the mainline, where nothing is ever ahead,
+ * the last is the only trace a committed change leaves.
+ */
+export function dirtyOrAheadPaths(
+  workspace: AvailableWorkspace,
+  committedThisTurn: readonly string[] = [],
+): Set<string> {
+  const paths = new Set<string>(committedThisTurn);
   for (const file of workspace.workingTree.files) {
     paths.add(file.path);
   }
