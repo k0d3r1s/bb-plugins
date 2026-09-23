@@ -1,6 +1,6 @@
 ---
 name: review-code
-description: Run a calibrated multi-perspective code/plan review (senior-dev, senior-qa, security, end-user), then consolidate and disposition findings. The workflow behind `bb devkit review` and auto-review's devkit mode.
+description: Run a calibrated multi-perspective code/plan review (senior-dev, senior-qa, security, end-user), then consolidate and disposition findings. The workflow behind `bb devkit review` and auto-review's code and plan reviews.
 ---
 
 # Calibrated review (review-code)
@@ -40,3 +40,7 @@ blocker, CONCERNS REMAIN if only concerns, else PASS.
 
 Validate each finding against the actual code/plan; fix every valid one (all tiers); skip false
 positives with a one-line reason; re-verify; never push. Do not ask permission to fix.
+
+For **plan** scope, "fix" means editing the plan document itself — allowed in plan mode — and
+nothing else; never start implementing. When auto-review held the plan back for this review,
+finish by presenting the revised plan for approval again: that presentation goes to the user.
