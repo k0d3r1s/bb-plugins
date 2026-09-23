@@ -37,6 +37,7 @@
     "build": "node scripts/build-index.mjs && bb plugin build",
     "prepack": "node scripts/build-index.mjs && bb plugin build",
     "test": "vitest run --config vitest.config.ts",
+    "test:coverage": "vitest run --config vitest.config.ts --coverage",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -46,8 +47,9 @@
     "@get-bb/plugin-sdk": "^0.4.106",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.0.0",
+    "@vitest/coverage-v8": "^4.1.11",
     "js-yaml": "^4.1.0",
     "typescript": "^5.9.2",
-    "vitest": "^4.1.1"
+    "vitest": "^4.1.11"
   }
 }

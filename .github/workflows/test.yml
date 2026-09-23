@@ -1,0 +1,86 @@
+name: Test
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same ref for PRs (fast feedback), but let
+# branch pushes finish so a green run is recorded per commit.
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: test (${{ matrix.plugin }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        plugin: [agent-hooks, auto-review, devkit, dir-skills, shared-runtime]
+        include:
+          - coverage: true
+          # dir-skills has no runtime tests; its `npm test` is a type-check.
+          - plugin: dir-skills
+            coverage: false
+    defaults:
+      run:
+        working-directory: plugins/${{ matrix.plugin }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      # Not every plugin commits a lockfile. --legacy-peer-deps sidesteps an
+      # npm arborist bug in vitest 4's optional peer graph (see README).
+      - name: Install dependencies
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci --include=dev --legacy-peer-deps
+          else
+            npm install --include=dev --legacy-peer-deps --no-package-lock
+          fi
+
+      - name: Run tests
+        if: ${{ !matrix.coverage }}
+        run: npm test
+
+      - name: Run tests with coverage
+        if: ${{ matrix.coverage }}
+        run: npm run test:coverage
+
+      # One flag per plugin in a parallel Coveralls build; coverage-finish
+      # closes it. lcov paths are plugin-relative, so base-path anchors them to
+      # the repo root. Upload only; Coveralls outages never gate a run.
+      - name: Upload coverage to Coveralls
+        if: ${{ matrix.coverage }}
+        uses: coverallsapp/github-action@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          file: plugins/${{ matrix.plugin }}/coverage/lcov.info
+          format: lcov
+          base-path: plugins/${{ matrix.plugin }}
+          parallel: true
+          flag-name: ${{ matrix.plugin }}
+          fail-on-error: false
+
+  coverage-finish:
+    # Closes the parallel Coveralls build once every plugin's report is in.
+    # always() so a red test job still publishes whatever coverage was uploaded.
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Finish Coveralls parallel build
+        uses: coverallsapp/github-action@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          parallel-finished: true
+          carryforward: agent-hooks,auto-review,devkit,shared-runtime
+          fail-on-error: false

@@ -4,3 +4,4 @@ dist/
 .bundled-runtime/
 *.tsbuildinfo
 .DS_Store
+coverage/

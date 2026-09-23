@@ -1,5 +1,8 @@
 # bb-plugins
 
+[![Test](https://github.com/lettland/bb-plugins/actions/workflows/test.yml/badge.svg?branch=master)](https://github.com/lettland/bb-plugins/actions/workflows/test.yml)
+[![Coverage Status](https://coveralls.io/repos/github/lettland/bb-plugins/badge.svg?branch=master)](https://coveralls.io/github/lettland/bb-plugins?branch=master)
+
 A monorepo of [bb](https://getbb.app) plugins. Each plugin is a self-contained
 package under `plugins/<name>/` with its own `package.json` and `bb` manifest.
 The root [`.bb/plugins.json`](.bb/plugins.json) collection manifest indexes them.
@@ -37,6 +40,7 @@ npm package). From a plugin directory:
 ```sh
 npm install --include=dev --legacy-peer-deps
 npm test
+npm run test:coverage   # writes coverage/lcov.info (plugins with runtime tests)
 bb plugin build          # downloads the build toolchain on first use
 ```
 
@@ -44,6 +48,15 @@ bb plugin build          # downloads the build toolchain on first use
 graph. The bb plugin SDK declares its server-side deps (`better-sqlite3`,
 `cron-parser`, `hono`) as optional peers; a plugin whose tests use the SDK test
 harness lists them as devDependencies.
+
+## CI and coverage
+
+[`.github/workflows/test.yml`](.github/workflows/test.yml) runs every plugin's
+suite on pushes and pull requests to `master`. Plugins with runtime tests run
+`npm run test:coverage` (vitest's v8 provider, or Node's built-in coverage for
+`shared-runtime`) and upload `lcov.info` to Coveralls as one flag per plugin of a
+parallel build; a final job closes it, carrying forward flags a run did not
+report. Uploads never fail the run.
 
 ## Releasing
 
