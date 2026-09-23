@@ -17,7 +17,9 @@ function safe(value) {
 }
 
 function encodeLibraryId(libraryId) {
-  const segments = libraryId.split("/");
+  // Context7 ids are written with a leading slash ("/vercel/next.js"); drop exactly one so the
+  // canonical form is accepted. Any other empty segment ("//x", "a//b", "/") is still rejected.
+  const segments = libraryId.replace(/^\//u, "").split("/");
   for (const seg of segments) {
     if (seg === "" || seg === "." || seg === ".." || !LIBRARY_SEGMENT_RE.test(seg)) return null;
   }

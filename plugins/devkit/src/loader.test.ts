@@ -16,6 +16,10 @@ beforeAll(async () => {
   await writeFile(path.join(dataRoot, "skills", "big", "SKILL.md"), "x".repeat(MAX_BODY_BYTES + 100));
   await mkdir(path.join(dataRoot, "skills", "exact"), { recursive: true });
   await writeFile(path.join(dataRoot, "skills", "exact", "SKILL.md"), "y".repeat(MAX_BODY_BYTES));
+  // A SKILL.md / reference that is a directory makes readFile fail with EISDIR (not ENOENT).
+  await mkdir(path.join(dataRoot, "skills", "unreadable", "SKILL.md"), { recursive: true });
+  await mkdir(path.join(dataRoot, "references", "unreadable-ref.md"), { recursive: true });
+  await writeFile(path.join(dataRoot, "references", "huge-ref.md"), "z".repeat(MAX_BODY_BYTES + 1));
 });
 
 afterAll(async () => {
@@ -72,6 +76,36 @@ describe("loadSkill", () => {
     const r = await loadSkill(dataRoot, undefined, "no-such-reference");
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.code).toBe("not_found");
+  });
+
+  it("returns read_failed (not not_found) when the skill body cannot be read", async () => {
+    const r = await loadSkill(dataRoot, "unreadable");
+    expect(r).toEqual({ ok: false, code: "read_failed", message: "Could not read skill 'unreadable'." });
+  });
+
+  it("returns read_failed when a reference cannot be read", async () => {
+    const r = await loadSkill(dataRoot, undefined, "unreadable-ref");
+    expect(r).toEqual({ ok: false, code: "read_failed", message: "Could not read reference 'unreadable-ref'." });
+  });
+
+  it("prefers reference over slug when both are given", async () => {
+    const r = await loadSkill(dataRoot, "go-essentials", "owasp-categories");
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.content).toContain("OWASP");
+      expect(r.slug).toBe("go-essentials");
+      expect(r.reference).toBe("owasp-categories");
+    }
+  });
+
+  it("truncates an oversized reference with a reference-specific marker", async () => {
+    const r = await loadSkill(dataRoot, undefined, "huge-ref");
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.truncated).toBe(true);
+      expect(r.slug).toBeNull();
+      expect(r.content.endsWith(`[truncated: reference 'huge-ref' exceeds ${MAX_BODY_BYTES} bytes]`)).toBe(true);
+    }
   });
 
   it("truncates an oversized body with a marker", async () => {

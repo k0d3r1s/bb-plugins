@@ -21,6 +21,8 @@ beforeAll(async () => {
   dataRoot = await mkdtemp(path.join(tmpdir(), "devkit-cli-"));
   await mkdir(path.join(dataRoot, "skills", "go-testing"), { recursive: true });
   await writeFile(path.join(dataRoot, "skills", "go-testing", "SKILL.md"), "# Go testing\nbody\n");
+  await mkdir(path.join(dataRoot, "skills", "no-newline"), { recursive: true });
+  await writeFile(path.join(dataRoot, "skills", "no-newline", "SKILL.md"), "# No trailing newline");
 });
 afterAll(async () => {
   await rm(dataRoot, { recursive: true, force: true });
@@ -67,6 +69,24 @@ describe("runDevkitCli", () => {
     expect(r.stdout).toContain("go-essentials:");
   });
 
+  it("skills list sorts entries by slug", async () => {
+    const r = await runDevkitCli(["skills", "list"], deps());
+    expect(r.stdout).toBe("cmd-commit: Command — Create git commits\ngo-essentials: Go basics\ngo-testing: Go tests\n");
+  });
+
+  it("skills find reports no match for an unrelated topic", async () => {
+    const r = await runDevkitCli(["skills", "find", "haskell", "monads"], deps());
+    expect(r).toEqual({ exitCode: 0, stdout: 'No devkit skill matched "haskell monads".\n' });
+  });
+
+  it("skills show needs a slug and normalizes a missing trailing newline", async () => {
+    expect(await runDevkitCli(["skills", "show"], deps())).toEqual({ exitCode: 2, stderr: "skills show needs a slug\n" });
+    const r = await runDevkitCli(["skills", "show", "no-newline"], deps());
+    expect(r).toEqual({ exitCode: 0, stdout: "# No trailing newline\n" });
+    const withNewline = await runDevkitCli(["skills", "show", "go-testing"], deps());
+    expect(withNewline.stdout).toBe("# Go testing\nbody\n");
+  });
+
   it("skills find ranks by topic; empty topic fails", async () => {
     const r = await runDevkitCli(["skills", "find", "golang"], deps());
     expect(r.exitCode).toBe(0);
@@ -102,6 +122,13 @@ describe("runDevkitCli", () => {
     expect(withArgs.stdout).toContain("Arguments: wip fix");
     expect((await runDevkitCli(["run", "nope"], deps())).exitCode).toBe(1);
     expect((await runDevkitCli(["run"], deps())).exitCode).toBe(2);
+  });
+
+  it("lists command workflows sorted by name", async () => {
+    const cmd = (name: string) => ({ slug: `cmd-${name}`, description: `Command — ${name} it`, category: "cmd", keywords: [], tokens: [] });
+    const many = { index: { generatedAt: "t", categories: [], skills: [cmd("review"), cmd("commit"), cmd("plan")] }, dataRoot };
+    const r = await runDevkitCli(["commands"], many);
+    expect(r.stdout).toBe("Run one with 'bb devkit run <name>':\ncommit: commit it\nplan: plan it\nreview: review it\n");
   });
 
   it("commands reports an empty list when no cmd-* skills exist", async () => {

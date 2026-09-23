@@ -53,6 +53,26 @@ describe("rankSkills", () => {
     const tie = [entry("b-skill", "shared", []), entry("a-skill", "shared", [])];
     expect(rankSkills(tie, "shared", 1).map((h) => h.slug)).toEqual(["a-skill"]);
   });
+
+  it("orders many tied entries by slug regardless of input order", () => {
+    const tie = ["d-skill", "b-skill", "c-skill", "a-skill"].map((slug) => entry(slug, "shared", []));
+    expect(rankSkills(tie, "shared", 10).map((h) => h.slug)).toEqual(["a-skill", "b-skill", "c-skill", "d-skill"]);
+  });
+
+  it("tolerates entries without keywords or tokens (older index shape)", () => {
+    const legacy = [
+      { slug: "cache", description: "no arrays", category: "x" },
+      { slug: "other", description: "no arrays", category: "x" },
+    ] as unknown as SkillIndexEntry[];
+    // Only the exact-slug bonus can score; the missing arrays must not throw.
+    expect(rankSkills(legacy, "cache", 5)).toEqual([{ slug: "cache", description: "no arrays" }]);
+    expect(rankSkills(legacy, "anything", 5)).toEqual([]);
+  });
+
+  it("keeps duplicate slugs with equal scores (stable, no dedup)", () => {
+    const dup = [entry("same", "first", ["kafka"]), entry("same", "second", ["kafka"])];
+    expect(rankSkills(dup, "kafka", 5).map((h) => h.description)).toEqual(["first", "second"]);
+  });
 });
 
 describe("clampLimit", () => {

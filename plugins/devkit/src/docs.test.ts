@@ -20,6 +20,13 @@ describe("fetchDocs", () => {
     if (r.ok) expect(r.url).toBe("https://x/api/vercel/next.js?type=txt");
   });
 
+  it("accepts the canonical leading-slash Context7 id without doubling the slash", async () => {
+    const fetchImpl = fakeFetch("docs");
+    const r = await fetchDocs({ libraryId: "/vercel/next.js" }, { base: "https://x/api", fetchImpl });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.url).toBe("https://x/api/vercel/next.js?type=txt");
+  });
+
   it("libraryId takes precedence when both are supplied", async () => {
     const fetchImpl = fakeFetch("docs");
     const r = await fetchDocs({ query: "q", libraryId: "vercel/next.js" }, { base: "https://x/api", fetchImpl });
@@ -29,7 +36,7 @@ describe("fetchDocs", () => {
 
   it("rejects a libraryId with .. or empty segments before fetching", async () => {
     const fetchImpl = fakeFetch("nope");
-    for (const libraryId of ["../../search", "a/../b", "a//b", "..", "has space"]) {
+    for (const libraryId of ["../../search", "a/../b", "a//b", "..", "has space", "/", "//vercel/next.js", "/../search"]) {
       expect((await fetchDocs({ libraryId }, { fetchImpl })).ok).toBe(false);
     }
     expect(fetchImpl).not.toHaveBeenCalled();
