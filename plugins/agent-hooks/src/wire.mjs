@@ -20,13 +20,26 @@ import os from "node:os";
 
 export const INSTALL_DIR = path.join(os.homedir(), ".bb", "agent-hooks");
 
-/** Which hook runs on which event, per host dialect. */
+/**
+ * Which hook runs on which event.
+ *
+ * Codex uses the SAME CamelCase event names and matcher shape as Claude Code in
+ * hooks.json -- verified against the live file, where gitkraken and
+ * deny-bgisolation-none.sh both sit under `PreToolUse` with a `matcher`. The
+ * snake_case names (`pre_tool_use`, `session_start`) that appear in
+ * config.toml's `[hooks.state."<plugin>:pre_tool_use:0:0"]` keys are a separate
+ * state-tracking namespace, NOT hooks.json event names. Wiring snake_case here
+ * produced entries that parsed fine and would never have fired.
+ *
+ * The only codex difference is that each command is wrapped in codex-shim.sh,
+ * which synthesizes CLAUDE_PROJECT_DIR and sets the host marker.
+ */
 export const WIRING = [
-  { script: "guard-bash.sh", claude: [{ event: "PreToolUse", matcher: "Bash" }], codex: ["pre_tool_use"] },
-  { script: "secret-scan.sh", claude: [{ event: "PreToolUse", matcher: "Write|Edit|MultiEdit" }], codex: ["pre_tool_use"] },
-  { script: "review-plan-before-exit.sh", claude: [{ event: "PreToolUse", matcher: "ExitPlanMode" }], codex: ["pre_tool_use"] },
-  { script: "verify-before-stop.sh", claude: [{ event: "Stop" }, { event: "SubagentStop" }], codex: ["stop", "subagent_stop"] },
-  { script: "session-reset.sh", claude: [{ event: "SessionStart" }], codex: ["session_start"] },
+  { script: "guard-bash.sh", events: [{ event: "PreToolUse", matcher: "Bash" }] },
+  { script: "secret-scan.sh", events: [{ event: "PreToolUse", matcher: "Write|Edit|MultiEdit" }] },
+  { script: "review-plan-before-exit.sh", events: [{ event: "PreToolUse", matcher: "ExitPlanMode" }] },
+  { script: "verify-before-stop.sh", events: [{ event: "Stop" }, { event: "SubagentStop" }] },
+  { script: "session-reset.sh", events: [{ event: "SessionStart" }] },
 ];
 
 export const PROVIDERS = {
@@ -76,12 +89,6 @@ export function backupConfig(file) {
   return dest;
 }
 
-function claudeEntry(script, matcher) {
-  const entry = { hooks: [{ type: "command", command: path.join(INSTALL_DIR, script) }] };
-  if (matcher !== undefined) entry.matcher = matcher;
-  return entry;
-}
-
 /** Remove only our entries, preserving every neighbour and every empty-array
  *  quirk we did not create. */
 function stripOurs(hooks) {
@@ -91,6 +98,7 @@ function stripOurs(hooks) {
       out[event] = groups;
       continue;
     }
+    const hadOurs = groups.some((g) => (g?.hooks ?? []).some((h) => isOurs(h?.command)));
     const kept = groups
       .map((g) => {
         if (!g || !Array.isArray(g.hooks)) return g;
@@ -99,36 +107,38 @@ function stripOurs(hooks) {
         return { ...g, hooks: inner };
       })
       .filter((g) => g !== null);
+
+    // Drop an event key we emptied -- otherwise a rename of our event names (as
+    // happened when codex was first wired under snake_case) leaves dead keys
+    // behind forever. Only keys WE emptied: a pre-existing empty array, or the
+    // `Stop: [{ matcher: "", hooks: [] }]` quirk in ~/.claude-work, is preserved.
+    if (kept.length === 0 && hadOurs) continue;
     out[event] = kept;
   }
   return out;
 }
 
-export function planClaude(data) {
+function buildPlan(data, makeCommand) {
   const next = structuredClone(data ?? {});
   next.hooks = stripOurs(next.hooks);
-  for (const { script, claude } of WIRING) {
-    for (const { event, matcher } of claude) {
+  for (const { script, events } of WIRING) {
+    for (const { event, matcher } of events) {
       if (!Array.isArray(next.hooks[event])) next.hooks[event] = []; // create, never assume
-      next.hooks[event].push(claudeEntry(script, matcher));
+      const entry = { hooks: [{ type: "command", command: makeCommand(script) }] };
+      if (matcher !== undefined) entry.matcher = matcher;
+      next.hooks[event].push(entry);
     }
   }
   return next;
 }
 
+export function planClaude(data) {
+  return buildPlan(data, (script) => path.join(INSTALL_DIR, script));
+}
+
 export function planCodex(data) {
-  const next = structuredClone(data ?? {});
-  next.hooks = stripOurs(next.hooks);
   const shim = path.join(INSTALL_DIR, "codex-shim.sh");
-  for (const { script, codex } of WIRING) {
-    for (const event of codex) {
-      if (!Array.isArray(next.hooks[event])) next.hooks[event] = [];
-      next.hooks[event].push({
-        hooks: [{ type: "command", command: `'${shim}' '${path.join(INSTALL_DIR, script)}'` }],
-      });
-    }
-  }
-  return next;
+  return buildPlan(data, (script) => `'${shim}' '${path.join(INSTALL_DIR, script)}'`);
 }
 
 export function planUninstall(data) {
@@ -153,6 +163,6 @@ export function countOurs(data) {
 }
 
 /** Total entries we would install, for the status bar. */
-export function expectedCount(kind) {
-  return WIRING.reduce((n, w) => n + (kind === "codex" ? w.codex.length : w.claude.length), 0);
+export function expectedCount() {
+  return WIRING.reduce((n, w) => n + w.events.length, 0);
 }

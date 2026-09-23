@@ -360,13 +360,25 @@ path_is_gitignored() {
 
 # Only env-assignment-shaped content is judged here. Appending prose to a tracked
 # README is nobody's business; appending `API_KEY=…` to one is.
+# Evaluated PER CLAUSE. A whole-command match is wrong and was a real false
+# positive: in a multi-line script it paired an `echo` on line 1 with a `NAME=`
+# on line 3 and a `2>/dev/null` on line 4, and refused the lot. The echo, the
+# assignment and the redirection all have to belong to the SAME clause.
 WRITE_APPROVED=0
-if echo "$COMMAND" | grep -qE '^[[:space:]]*(echo|printf)\b' \
-  && echo "$COMMAND" | grep -qE '[A-Za-z_][A-Za-z0-9_]*=' \
-  && echo "$COMMAND" | grep -qE '>>?[[:space:]]*[^[:space:]]+'; then
-  WRITE_TARGET="$(echo "$COMMAND" | sed -nE 's/.*>>?[[:space:]]*([^[:space:]|;&<>]+).*/\1/p')"
+WRITE_CLAUSES="$(printf '%s' "$COMMAND" | tr ';|&\n' '\n' | tr -s '\n')"
+while IFS= read -r wclause; do
+  [ -z "$wclause" ] && continue
+  echo "$wclause" | grep -qE '^[[:space:]]*(echo|printf)\b' || continue
+  echo "$wclause" | grep -qE '[A-Za-z_][A-Za-z0-9_]*=' || continue
+  echo "$wclause" | grep -qE '>>?[[:space:]]*[^[:space:]]+' || continue
+
+  WRITE_TARGET="$(echo "$wclause" | sed -nE 's/.*>>?[[:space:]]*([^[:space:]|;&<>]+).*/\1/p')"
+  case "$WRITE_TARGET" in
+    "" | /dev/*) continue ;; # device sinks are not files anyone commits
+  esac
+
   IS_APPEND=0
-  echo "$COMMAND" | grep -qE '>>[[:space:]]*[^[:space:]]+' && IS_APPEND=1
+  echo "$wclause" | grep -qE '>>[[:space:]]*[^[:space:]]+' && IS_APPEND=1
 
   if [ "$IS_APPEND" = "1" ] && path_is_gitignored "$WRITE_TARGET"; then
     # Ignored destination + append of a variable: the legitimate case. Allowed,
@@ -379,7 +391,7 @@ if echo "$COMMAND" | grep -qE '^[[:space:]]*(echo|printf)\b' \
     log_incident "HIGH" "SOFT BLOCKED: variable written to committable '$WRITE_TARGET': $COMMAND"
     deny "SOFT BLOCK: '$WRITE_TARGET' is not gitignored, so this variable could be committed." "Put it in a gitignored file (and confirm that file is in .gitignore), or confirm with the user that this value is safe to commit. Appending to an ignored file is allowed without asking."
   fi
-fi
+done <<< "$WRITE_CLAUSES"
 
 # Overwriting system/config files. Still name-based, and still the fallback
 # whenever the gitignore test above could not run (no repo, no git, error) —

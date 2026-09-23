@@ -72,3 +72,6 @@
 {"id": "f5-truncate-ignored-env", "cmd": "echo \"FOO=bar\" > .env", "expect": "soft", "fixture": "env-ignored", "why": "F5: truncation still needs confirmation even when ignored"}
 {"id": "f5-append-private-key", "cmd": "cat ~/.ssh/id_rsa >> .env", "expect": "hard", "fixture": "env-ignored", "why": "F5: source still matters. Caught hard by the reader rule; conservative and correct, so encode hard rather than loosening it."}
 {"id": "f5-append-env-dump", "cmd": "env >> .env", "expect": "hard", "fixture": "env-ignored", "why": "F8 wins on the command regardless of destination"}
+{"id":"f5-fp-multiline-unrelated-redirect","cmd":"echo \"=== header ===\"\nfor f in a b; do\n  n=$(grep -c thing \"$f\" 2>/dev/null || echo 0)\n  printf '  %s %s\\n' \"$f\" \"$n\"\ndone","expect":"allow","why":"REAL FP found in use: echo on line 1 + NAME= on line 3 + 2>/dev/null on line 3 were matched as one write. Must be judged per clause."}
+{"id":"f5-fp-devnull-sink","cmd":"echo \"FOO=bar\" > /dev/null","expect":"allow","why":"a device sink is not a file anyone commits"}
+{"id":"f5-fp-stderr-redirect","cmd":"echo \"VAR=1\" && ls missing 2>/dev/null","expect":"allow","why":"the redirect belongs to a different clause than the assignment"}

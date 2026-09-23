@@ -99,7 +99,7 @@ async function cmdStatus(argv, out) {
       continue;
     }
     const found = countOurs(current.data);
-    const want = expectedCount(provider.kind);
+    const want = expectedCount();
     const state = found === want ? "ok" : found === 0 ? "not installed" : "partial";
     if (found !== want) bad += 1;
     out(`  ${id.padEnd(12)} ${String(found)}/${want}  ${state}`);
@@ -171,36 +171,33 @@ function cmdLog(argv, out) {
   return 0;
 }
 
-export async function runAgentHooksCli(argv, ctx = {}) {
+/** bb's CLI contract: run() must resolve to { exitCode, stdout?, stderr? }. */
+export async function runAgentHooksCli(argv) {
   const lines = [];
   const out = (s) => lines.push(s);
   const [sub, ...rest] = argv;
-  let code = 0;
+  let exitCode = 0;
   try {
     switch (sub) {
       case "install":
-        code = await cmdInstall(rest, out);
+        exitCode = await cmdInstall(rest, out);
         break;
       case "status":
       case undefined:
-        code = await cmdStatus(rest, out);
+        exitCode = await cmdStatus(rest, out);
         break;
       case "uninstall":
-        code = await cmdUninstall(rest, out);
+        exitCode = await cmdUninstall(rest, out);
         break;
       case "log":
-        code = cmdLog(rest, out);
+        exitCode = cmdLog(rest, out);
         break;
       default:
         out(`unknown subcommand '${sub}'. Try: install | status | uninstall | log`);
-        code = 1;
+        exitCode = 1;
     }
   } catch (err) {
-    out(`error: ${err.message}`);
-    code = 1;
+    return { exitCode: 1, stdout: lines.join("\n"), stderr: `error: ${err.message}` };
   }
-  const text = lines.join("\n");
-  if (ctx.print) ctx.print(text);
-  else console.log(text);
-  return code;
+  return { exitCode, stdout: lines.join("\n") };
 }
