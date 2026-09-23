@@ -1,0 +1,36 @@
+{
+  "name": "@k0d3r1s/bb-plugin-agent-hooks",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "bb owns the tool-call safety hooks and installs them into each provider; providers only execute them.",
+  "engines": {
+    "bb": ">=0.0"
+  },
+  "bb": {
+    "name": "Agent hooks",
+    "description": "bb owns the tool-call safety hooks and installs them into each provider; providers only execute them.",
+    "branding": {
+      "icon": "ShieldCheck"
+    },
+    "server": "./server.ts"
+  },
+  "keywords": [
+    "bb-plugin"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "test": "node tests/verify-no-regression.mjs && node tests/secret-scan.mjs && vitest run --config vitest.config.ts",
+    "test:corpus": "node tests/verify-no-regression.mjs && node tests/secret-scan.mjs",
+    "baseline": "node tests/baseline.mjs --json",
+    "checksums": "node scripts/checksums.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@get-bb/plugin-sdk": "^0.4.106",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.2",
+    "vitest": "^4.1.1"
+  }
+}
