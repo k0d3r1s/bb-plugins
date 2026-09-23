@@ -29,7 +29,7 @@ interface HostOptions {
   sendDelivery?: "sent" | "queued";
   sendThrows?: boolean;
   authoredRows?: unknown[];
-  workingTreeFiles?: Array<{ path: string }>;
+  workingTreeFiles?: TreeFile[];
   worktree?: boolean;
   /** Latch a same-provider review between the first check and the lock. */
   reviewLandsBeforeLock?: boolean;
@@ -38,6 +38,20 @@ interface HostOptions {
   authoringThreads?: string[];
   getThrowsFor?: string[];
   resolveThrows?: boolean;
+}
+
+interface TreeFile {
+  path: string;
+  status?: string;
+  insertions?: number | null;
+  deletions?: number | null;
+  /** Served by `diffFile`; the fingerprint hashes it. */
+  content?: string;
+}
+
+interface TreeCommit {
+  sha: string;
+  paths: string[];
 }
 
 function fileChangeRow(path: string, sourceSeqStart = 150): unknown {
@@ -70,7 +84,12 @@ function createHost(options: HostOptions = {}) {
   const timelineLimits: Array<string | undefined> = [];
   let hostRef: { bb: { storage: { kv: KvLike } } } | null = null;
   const authoredRows = options.authoredRows ?? [fileChangeRow("src/a.ts")];
-  const workingTreeFiles = options.workingTreeFiles ?? [{ path: "src/a.ts" }];
+  let workingTreeFiles: TreeFile[] = options.workingTreeFiles ?? [
+    { path: "src/a.ts" },
+  ];
+  let headSha = "head-0";
+  let commits: TreeCommit[] = [];
+  let siblingRows: Record<string, unknown[]> = {};
   const worktree = options.worktree ?? true;
   const authoring = options.authoringThreads ?? [THREAD_ID];
   let envThreads: EnvThread[] = options.envThreads ?? [
@@ -122,7 +141,9 @@ function createHost(options: HostOptions = {}) {
           await latchReview(hostRef.bb.storage.kv, metadataOf("rival"), "rival");
         }
         return {
-          rows: authoring.includes(args.threadId) ? authoredRows : [],
+          rows:
+            siblingRows[args.threadId] ??
+            (authoring.includes(args.threadId) ? authoredRows : []),
           maxSeq,
           timelinePage: {
             hasOlderRows: false,
@@ -135,6 +156,9 @@ function createHost(options: HostOptions = {}) {
         return [
           ...envThreads.map((entry) => ({
             parentThreadId: null,
+            lifecycleOwnerThreadId: null,
+            deletedAt: null,
+            updatedAt: Date.now(),
             originPluginId: null,
             visibility: "visible",
             environmentId: ENV_ID,
@@ -173,16 +197,42 @@ function createHost(options: HostOptions = {}) {
       status: async () => ({
         outcome: "available",
         workspace: {
-          workingTree: { files: workingTreeFiles },
+          workingTree: {
+            files: workingTreeFiles.map((file) => ({
+              status: "M",
+              insertions: 1,
+              deletions: 0,
+              ...file,
+            })),
+          },
           branch: { currentBranch: "bb/feature", defaultBranch: "master" },
-          checkout: { kind: "branch" },
+          checkout: { kind: "branch", branchName: "bb/feature", headSha },
           mergeBase: {
-            files: [],
+            files: commits.flatMap((commit) =>
+              commit.paths.map((path) => ({ path, status: "M" })),
+            ),
+            commits: commits.map((commit) => ({ sha: commit.sha })),
             mergeBaseBranch: "master",
             baseRef: "abc123",
           },
         },
       }),
+      diffFile: async (args: { path: string }) => {
+        const file = workingTreeFiles.find((entry) => entry.path === args.path);
+        if (file?.content === undefined) {
+          throw new Error(`no content for ${args.path}`);
+        }
+        return { path: args.path, content: file.content, contentEncoding: "utf8", sizeBytes: 0 };
+      },
+      diffFiles: async (args: { target: string; sha?: string }) => {
+        const commit = commits.find(
+          (entry) => args.target === "commit" && entry.sha === args.sha,
+        );
+        return {
+          outcome: "available",
+          files: (commit?.paths ?? []).map((path) => ({ path, previousPath: null })),
+        };
+      },
     },
   };
 
@@ -207,6 +257,17 @@ function createHost(options: HostOptions = {}) {
     },
     setQueuedRows: (next: Array<{ id: string }>) => {
       queuedRows = next;
+    },
+    /** The working tree as a shell command would leave it — no timeline row. */
+    setWorkingTree: (next: TreeFile[]) => {
+      workingTreeFiles = next;
+    },
+    commit: (sha: string, paths: string[]) => {
+      commits = [...commits, { sha, paths }];
+      headSha = sha;
+    },
+    setSiblingRows: (threadId: string, rows: unknown[]) => {
+      siblingRows = { ...siblingRows, [threadId]: rows };
     },
   };
 }
@@ -320,7 +381,7 @@ describe("auto-review plugin", () => {
     await plugin(host.bb);
     const { errors } = await emitActive(host);
     expect(errors).toEqual([]);
-    expect(host.metadata.turnStart).toEqual({ sinceSeq: 100 });
+    expect(host.metadata.turnStart).toMatchObject({ sinceSeq: 100 });
     await host.harness.dispose();
   });
 
@@ -370,6 +431,110 @@ describe("auto-review plugin", () => {
     await emitActive(host);
     await emitIdle(host);
     expect(host.sends).toHaveLength(0);
+    await host.harness.dispose();
+  });
+
+  async function lastFire(host: Host): Promise<Record<string, unknown>> {
+    const status = await host.harness.runCli(["status", THREAD_ID, "--json"]);
+    return JSON.parse(status.stdout).lastFire;
+  }
+
+  it("reviews a file a shell command created, though no timeline row records it", async () => {
+    const host = createHost({ authoredRows: [], workingTreeFiles: [] });
+    await plugin(host.bb);
+    await emitActive(host);
+    host.setWorkingTree([{ path: "gen/out.ts", status: "??", content: "x" }]);
+    await emitIdle(host);
+    expect(host.sends).toHaveLength(1);
+    expect(await lastFire(host)).toMatchObject({
+      outcome: "fired",
+      scopePaths: ["gen/out.ts"],
+    });
+    await host.harness.dispose();
+  });
+
+  it("ignores untracked harness output that appears during the turn", async () => {
+    const host = createHost({ authoredRows: [], workingTreeFiles: [] });
+    await plugin(host.bb);
+    await emitActive(host);
+    host.setWorkingTree([
+      { path: ".claude/backups/a.ts.123.bak", status: "??", content: "b" },
+      { path: "src/real.ts", status: "??", content: "r" },
+    ]);
+    await emitIdle(host);
+    expect(await lastFire(host)).toMatchObject({
+      outcome: "fired",
+      scopePaths: ["src/real.ts"],
+    });
+    await host.harness.dispose();
+  });
+
+  it("reviews a file dirty before the turn whose content a shell command changed", async () => {
+    const host = createHost({
+      authoredRows: [],
+      workingTreeFiles: [{ path: "src/a.ts", content: "old" }],
+    });
+    await plugin(host.bb);
+    await emitActive(host);
+    // Same line stats, different content: `sed -i` rewriting the changed line.
+    host.setWorkingTree([{ path: "src/a.ts", content: "new" }]);
+    await emitIdle(host);
+    expect(await lastFire(host)).toMatchObject({
+      outcome: "fired",
+      scopePaths: ["src/a.ts"],
+    });
+    await host.harness.dispose();
+  });
+
+  it("does not claim a file that was already dirty and the turn left alone", async () => {
+    const host = createHost({
+      authoredRows: [],
+      workingTreeFiles: [{ path: "src/a.ts", content: "same" }],
+    });
+    await plugin(host.bb);
+    await emitActive(host);
+    await emitIdle(host);
+    expect(host.sends).toHaveLength(0);
+    expect(await lastFire(host)).toMatchObject({ reason: "no-authorship" });
+    await host.harness.dispose();
+  });
+
+  it("reviews files the turn committed from the shell", async () => {
+    const host = createHost({ authoredRows: [], workingTreeFiles: [] });
+    await plugin(host.bb);
+    await emitActive(host);
+    host.commit("c1", ["src/committed.ts"]);
+    await emitIdle(host);
+    expect(await lastFire(host)).toMatchObject({
+      outcome: "fired",
+      scopePaths: ["src/committed.ts"],
+    });
+    await host.harness.dispose();
+  });
+
+  it("leaves a sibling's tool edit made during the turn to the sibling", async () => {
+    const host = createHost({
+      authoredRows: [],
+      workingTreeFiles: [],
+      envThreads: [
+        { id: THREAD_ID, status: "idle" },
+        { id: SIBLING_ID, status: "active" },
+      ],
+    });
+    await plugin(host.bb);
+    await emitActive(host);
+    host.setSiblingRows(SIBLING_ID, [
+      { ...(fileChangeRow("sib.ts") as object), createdAt: Date.now() },
+    ]);
+    host.setWorkingTree([
+      { path: "sib.ts", content: "s" },
+      { path: "mine.ts", content: "m" },
+    ]);
+    await emitIdle(host);
+    expect(await lastFire(host)).toMatchObject({
+      outcome: "fired",
+      scopePaths: ["mine.ts"],
+    });
     await host.harness.dispose();
   });
 
@@ -462,7 +627,7 @@ describe("auto-review plugin", () => {
     expect(host.sends).toHaveLength(0);
     expect(host.metadata.phase).toBe("deferred");
     expect(typeof host.metadata.deferredSince).toBe("number");
-    expect(host.metadata.turnStart).toEqual({ sinceSeq: 100 });
+    expect(host.metadata.turnStart).toMatchObject({ sinceSeq: 100 });
     const status = await host.harness.runCli(["status", THREAD_ID, "--json"]);
     expect(JSON.parse(status.stdout).lastFire).toMatchObject({
       outcome: "deferred",
@@ -489,7 +654,7 @@ describe("auto-review plugin", () => {
     await emitIdle(host);
     expect(host.sends).toHaveLength(0);
     expect(host.metadata.phase).toBe("deferred");
-    expect(host.metadata.turnStart).toEqual({ sinceSeq: 100 });
+    expect(host.metadata.turnStart).toMatchObject({ sinceSeq: 100 });
     await host.harness.dispose();
   });
 
@@ -503,7 +668,7 @@ describe("auto-review plugin", () => {
 
     host.setMaxSeq(400);
     await emitActive(host);
-    expect(host.metadata.turnStart).toEqual({ sinceSeq: 100 });
+    expect(host.metadata.turnStart).toMatchObject({ sinceSeq: 100 });
     await host.harness.dispose();
   });
 
@@ -600,7 +765,7 @@ describe("auto-review plugin", () => {
     // The cursor is free to advance again now that nothing is owed.
     host.setMaxSeq(400);
     await emitActive(host);
-    expect(host.metadata.turnStart).toEqual({ sinceSeq: 400 });
+    expect(host.metadata.turnStart).toMatchObject({ sinceSeq: 400 });
     await host.harness.dispose();
   });
 

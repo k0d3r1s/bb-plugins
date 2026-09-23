@@ -18,13 +18,14 @@ import {
   type Deferral,
 } from "./src/deferrals.js";
 import {
-  authoredPaths,
   captureSinceSeq,
+  captureTree,
   computeScope,
   dirtyOrAheadPaths,
   fetchWorkspace,
   isBranchCheckout,
   mainlineBase,
+  turnChangedPaths,
 } from "./src/detect.js";
 import {
   isBusyStatus,
@@ -289,12 +290,19 @@ export default async function plugin(bb: BbPluginApi) {
       await deferTurn(thread, state, environmentId);
       return;
     }
-    const isWorktree = selfIsWorktree(
-      await bb.sdk.threads.list({ environmentId, includeHidden: true }),
-      thread.id,
-    );
+    const threadEntries = await bb.sdk.threads.list({
+      environmentId,
+      includeHidden: true,
+    });
+    const isWorktree = selfIsWorktree(threadEntries, thread.id);
 
-    const authored = await authoredPaths(bb, thread.id, state.turnStart.sinceSeq);
+    const authored = await turnChangedPaths(bb, {
+      threadId: thread.id,
+      environmentId,
+      turnStart: state.turnStart,
+      workspace,
+      threadEntries,
+    });
     if (authored.length === 0) {
       await standDown(thread, state, "no-authorship");
       return;
@@ -612,8 +620,20 @@ export default async function plugin(bb: BbPluginApi) {
         // instead of starting the authorship window over and losing it.
         return;
       }
-      const sinceSeq = await captureSinceSeq(bb, thread.id);
-      await writeState(bb, thread.id, { turnStart: { sinceSeq } });
+      const startedAt = Date.now();
+      // The tree as this turn found it, so edits no timeline row records
+      // (shell commands, scripts, commits) are still attributed at idle.
+      // Taken alongside the cursor: the agent is already running, and an edit
+      // that lands before the snapshot would be absorbed into it.
+      const [sinceSeq, tree] = await Promise.all([
+        captureSinceSeq(bb, thread.id),
+        thread.environmentId === null
+          ? Promise.resolve(undefined)
+          : captureTree(bb, thread.environmentId),
+      ]);
+      await writeState(bb, thread.id, {
+        turnStart: { sinceSeq, startedAt, ...(tree === undefined ? {} : { tree }) },
+      });
     });
   });
 

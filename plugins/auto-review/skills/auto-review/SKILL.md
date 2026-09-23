@@ -117,7 +117,12 @@ review and commit then never run.
 - `sibling-active` — another thread on the same provider (in any project) has its
   auto-review running. Paired with outcome `deferred`, this turn is parked and will be
   reviewed as soon as that review ends. Not a skip — nothing is lost.
-- `no-authorship` — the agent changed no files this turn.
+- `no-authorship` — the turn changed no files: no tool edit, and nothing in the working
+  tree (a new, rewritten or deleted path, or one in a commit made on a branch ahead of its
+  base) changed since the turn started. Edits made through shell commands count. Untracked
+  files appearing under `.claude/`, `.codex/` or `.bb/` do not (harness backups and logs).
+  A turn without a turn-start tree snapshot (e.g. one that started before the plugin was
+  updated) is judged by tool edits alone.
 - `empty-scope` — the files it changed are no longer uncommitted or ahead (e.g. reverted).
 - `no-turn-start` — no turn-start cursor was recorded (a missed start event); stood down, fail-safe.
 - `disabled` — disabled globally or for this project.

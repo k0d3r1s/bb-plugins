@@ -9,8 +9,17 @@ one provider-neutral implementation driven by bb's `thread.idle` event.
 ## How it works
 
 - Fires on `thread.idle` for top-level, git-branch, user coding threads only.
-- Attributes work strictly to the thread's own timeline (`file-change` rows after the
-  turn's start cursor), so a sibling thread's or a human's edits are never claimed.
+- Attributes work to the turn however it was made: the thread's own `file-change` rows
+  after the turn's start cursor, plus whatever the working tree shows changed since the
+  turn started (a fingerprint per uncommitted path and the commits ahead of the base,
+  snapshotted on `thread.active`) — so shell redirects, `sed -i`, scripts and generators
+  count too, as do shell commits on a branch ahead of its base (a commit straight onto the
+  mainline leaves nothing ahead, so nothing to review). A path another thread in the same
+  checkout changed through its own tools during the turn is left to that thread; files
+  already dirty and left untouched are never claimed; untracked files appearing under
+  harness state dirs (`.claude/`, `.codex/`, `.bb/` — edit backups, logs) are harness
+  output, not the turn's work. A sibling's shell edit, or a human's edit, made in the same
+  checkout during the turn cannot be told apart and is claimed.
 - Chooses commit / merge from a branch policy keyed on the mainline name: a feature
   branch merges into a personal mainline (e.g. `master`) whether the thread runs in a
   dedicated worktree or the primary checkout; a non-personal mainline (e.g. `main`) is

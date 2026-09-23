@@ -5,8 +5,12 @@ import {
   authoredPathsFromRows,
   computeScope,
   dirtyOrAheadPaths,
+  fingerprintsMatch,
   isBranchCheckout,
   mainlineBase,
+  siblingAuthoredPaths,
+  snapshotTree,
+  treeChangedPaths,
   type AvailableWorkspace,
 } from "./detect.js";
 
@@ -210,5 +214,173 @@ describe("authoredPaths", () => {
     const { bb, calls } = fakeBb([{ rows: [row("a.ts", 150)], olderEnd: null }]);
     expect(await authoredPaths(bb, "thr", 100)).toEqual(["a.ts"]);
     expect(calls).toHaveLength(1);
+  });
+});
+
+describe("fingerprintsMatch", () => {
+  it("matches equal stats and hashes", () => {
+    expect(fingerprintsMatch("M:1:0|abc", "M:1:0|abc")).toBe(true);
+  });
+
+  it("differs on line stats alone", () => {
+    expect(fingerprintsMatch("M:1:0|", "M:2:0|")).toBe(false);
+  });
+
+  it("differs on content when both sides were hashed", () => {
+    expect(fingerprintsMatch("M:1:0|abc", "M:1:0|def")).toBe(false);
+  });
+
+  it("falls back to stats when a side could not be hashed", () => {
+    expect(fingerprintsMatch("M:1:0|abc", "M:1:0|")).toBe(true);
+  });
+});
+
+describe("treeChangedPaths and siblingAuthoredPaths", () => {
+  function file(path: string, content: string | null, insertions = 1) {
+    return { path, status: "M", insertions, deletions: 0, content };
+  }
+
+  function workspaceOf(
+    files: Array<ReturnType<typeof file>>,
+    headSha = "h0",
+    commits: string[] = [],
+  ): AvailableWorkspace {
+    return {
+      workingTree: { files },
+      checkout: { kind: "branch", branchName: "b", headSha },
+      mergeBase: { files: [], commits: commits.map((sha) => ({ sha })) },
+    } as unknown as AvailableWorkspace;
+  }
+
+  function fakeBb(
+    live: () => AvailableWorkspace,
+    commitFiles: Record<string, string[]> = {},
+    timelines: Record<string, unknown[]> = {},
+  ) {
+    const timelineCalls: string[] = [];
+    const bb = {
+      sdk: {
+        environments: {
+          diffFile: async ({ path }: { path: string }) => {
+            const hit = (
+              live().workingTree.files as Array<ReturnType<typeof file>>
+            ).find((entry) => entry.path === path);
+            if (hit?.content === null || hit === undefined) {
+              throw new Error("unreadable");
+            }
+            return { content: hit.content };
+          },
+          diffFiles: async ({ sha }: { sha: string }) => ({
+            outcome: "available",
+            files: (commitFiles[sha] ?? []).map((path) => ({
+              path,
+              previousPath: null,
+            })),
+          }),
+        },
+        threads: {
+          timeline: async ({ threadId }: { threadId: string }) => {
+            timelineCalls.push(threadId);
+            return {
+              rows: timelines[threadId] ?? [],
+              maxSeq: 0,
+              timelinePage: { hasOlderRows: false, olderCursor: null },
+            };
+          },
+        },
+      },
+    } as never;
+    return { bb, timelineCalls };
+  }
+
+  it("claims new, rewritten and committed paths but not untouched dirty ones", async () => {
+    let current = workspaceOf([file("kept.ts", "k"), file("edited.ts", "v1")]);
+    const { bb } = fakeBb(() => current, { c1: ["committed.ts"] });
+    const before = await snapshotTree(bb, "env", current);
+    current = workspaceOf(
+      [file("kept.ts", "k"), file("edited.ts", "v2"), file("new.ts", "n")],
+      "c1",
+      ["c1"],
+    );
+    const changed = await treeChangedPaths(bb, "env", before, current);
+    expect(changed.sort()).toEqual(["committed.ts", "edited.ts", "new.ts"]);
+  });
+
+  it("leaves untracked harness output out of the snapshot but keeps tracked harness files", async () => {
+    const untracked = (path: string) => ({
+      path,
+      status: "??",
+      insertions: null,
+      deletions: null,
+      content: "x",
+    });
+    const current = workspaceOf([
+      ...Array.from({ length: 300 }, (_, i) =>
+        untracked(`.claude/backups/f${i}.bak`),
+      ),
+      file(".claude/settings.json", "s"),
+      untracked("src/new.ts"),
+    ] as never);
+    const { bb } = fakeBb(() => current);
+    const snapshot = await snapshotTree(bb, "env", current);
+    expect(Object.keys(snapshot.files).sort()).toEqual([
+      ".claude/settings.json",
+      "src/new.ts",
+    ]);
+    expect(snapshot.files["src/new.ts"]).not.toMatch(/\|$/u);
+  });
+
+  it("skips a sibling whose timeline can no longer be read", async () => {
+    const entries = [
+      { id: "self", parentThreadId: null, lifecycleOwnerThreadId: null, deletedAt: null, status: "idle", updatedAt: 3_000 },
+      { id: "gone", parentThreadId: null, lifecycleOwnerThreadId: null, deletedAt: null, status: "active", updatedAt: 3_000 },
+    ] as never;
+    const bb = {
+      sdk: {
+        threads: {
+          timeline: async () => {
+            throw new Error("thread not found");
+          },
+        },
+      },
+    } as never;
+    expect([...(await siblingAuthoredPaths(bb, entries, "self", 1_000))]).toEqual([]);
+  });
+
+  it("treats this thread's subagents and owned helpers as its own, not siblings", async () => {
+    const startedAt = 1_000;
+    const change = (path: string) => ({
+      kind: "work",
+      workKind: "file-change",
+      createdAt: 2_000,
+      change: { path, movePath: null },
+    });
+    const { bb, timelineCalls } = fakeBb(() => workspaceOf([]), {}, {
+      sub: [change("sub.ts")],
+      advisor: [change("advisor.ts")],
+      sib: [change("sib.ts"), { ...change("old.ts"), createdAt: 500 }],
+    });
+    const entry = (
+      id: string,
+      extra: Record<string, unknown> = {},
+    ): Record<string, unknown> => ({
+      id,
+      parentThreadId: null,
+      lifecycleOwnerThreadId: null,
+      deletedAt: null,
+      status: "idle",
+      updatedAt: 3_000,
+      ...extra,
+    });
+    const entries = [
+      entry("self"),
+      entry("sub", { parentThreadId: "self" }),
+      entry("advisor", { parentThreadId: "elsewhere", lifecycleOwnerThreadId: "self" }),
+      entry("sib"),
+      entry("quiet", { updatedAt: 500 }),
+    ] as never;
+    const foreign = await siblingAuthoredPaths(bb, entries, "self", startedAt);
+    expect([...foreign]).toEqual(["sib.ts"]);
+    expect(timelineCalls).toEqual(["sib"]);
   });
 });

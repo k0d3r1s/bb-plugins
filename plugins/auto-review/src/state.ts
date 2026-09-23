@@ -17,8 +17,25 @@ export const REVIEW_IN_FLIGHT_PHASES: readonly AutoReviewPhase[] = [
 
 export const STALE_WINDOW_MS = 30 * 60 * 1_000;
 
+/**
+ * The working tree as the turn found it: a fingerprint per uncommitted path and
+ * the commits already ahead of the base. Diffed against the tree at idle, it
+ * catches edits no timeline row records — shell redirects, `sed -i`, scripts,
+ * generators, `git mv`, commits made from the shell.
+ */
+export const treeSnapshotSchema = z.object({
+  headSha: z.string().nullable(),
+  files: z.record(z.string(), z.string()),
+  commits: z.array(z.string()),
+});
+export type TreeSnapshot = z.infer<typeof treeSnapshotSchema>;
+
 export const turnStartSchema = z.object({
   sinceSeq: z.number().int().nonnegative(),
+  /** Wall-clock start, bounding which sibling edits count as concurrent. */
+  startedAt: z.number().optional(),
+  /** Absent when the tree could not be read at turn start; the timeline alone then decides. */
+  tree: treeSnapshotSchema.optional(),
 });
 export type TurnStart = z.infer<typeof turnStartSchema>;
 
