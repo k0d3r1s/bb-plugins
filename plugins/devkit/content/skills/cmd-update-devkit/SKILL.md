@@ -11,7 +11,7 @@ The marketplace/uninstall/install steps are Claude Code meta-commands (slash com
 
 ## Prerequisite
 
-devkit installs from the **`bb-plugins`** marketplace, which sources `github.com/k0d3r1s/bb-plugins`. Your changes must already be **pushed to GitHub** (e.g. `git push origin master` from the dev clone) — the steps below fetch from the marketplace, not from any local working tree.
+devkit installs from the **`bb-plugins`** marketplace, which sources `github.com/lettland/bb-plugins`. Your changes must already be **pushed to GitHub** (e.g. `git push origin master` from the dev clone) — the steps below fetch from the marketplace, not from any local working tree.
 
 ## Steps
 
@@ -36,4 +36,4 @@ devkit installs from the **`bb-plugins`** marketplace, which sources `github.com
 
 ## Resolution policy
 
-Installs from **`@bb-plugins`** (the GitHub marketplace for `k0d3r1s/bb-plugins`). Step 1 is what actually pulls new commits — without it, an uninstall/reinstall just restores the previously cached version. There is no `@local` marketplace in this setup.
+Installs from **`@bb-plugins`** (the GitHub marketplace for `lettland/bb-plugins`). Step 1 is what actually pulls new commits — without it, an uninstall/reinstall just restores the previously cached version. There is no `@local` marketplace in this setup.

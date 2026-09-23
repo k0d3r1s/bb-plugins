@@ -8,25 +8,25 @@ The root [`.bb/plugins.json`](.bb/plugins.json) collection manifest indexes them
 
 | Plugin | ID | npm |
 |---|---|---|
-| Auto review | `auto-review` | `@k0d3r1s/bb-plugin-auto-review` |
-| devkit | `devkit` | `@k0d3r1s/bb-plugin-devkit` |
-| Directory skills | `dir-skills` | `@k0d3r1s/bb-plugin-dir-skills` |
-| Shared Runtime | `shared-runtime` | `@k0d3r1s/bb-plugin-shared-runtime` |
+| Auto review | `auto-review` | `@lettland/bb-plugin-auto-review` |
+| devkit | `devkit` | `@lettland/bb-plugin-devkit` |
+| Directory skills | `dir-skills` | `@lettland/bb-plugin-dir-skills` |
+| Shared Runtime | `shared-runtime` | `@lettland/bb-plugin-shared-runtime` |
 
 ## Install a plugin
 
 From npm (per-plugin, tracks compatible releases):
 
 ```sh
-bb plugin install npm:@k0d3r1s/bb-plugin-auto-review
+bb plugin install npm:@lettland/bb-plugin-auto-review
 ```
 
 From this repo over git (select one plugin from the collection):
 
 ```sh
-bb plugin install git:https://github.com/k0d3r1s/bb-plugins.git --plugin auto-review
+bb plugin install git:https://github.com/lettland/bb-plugins.git --plugin auto-review
 # or the primitive, no collection manifest needed:
-bb plugin install git:https://github.com/k0d3r1s/bb-plugins.git --subdirectory plugins/auto-review
+bb plugin install git:https://github.com/lettland/bb-plugins.git --subdirectory plugins/auto-review
 ```
 
 ## Local development
@@ -70,10 +70,10 @@ release; `prerelease` is reachable only through such a dispatch.
 
 Because every changed plugin cuts at least a stable `patch`, its npm `latest`
 resolves after the first release that actually publishes — `npm install
-@k0d3r1s/bb-plugin-<name>` works once a run with `NPM_TOKEN` has published it (see
+@lettland/bb-plugin-<name>` works once a run with `NPM_TOKEN` has published it (see
 the note above). A `prerelease` dispatch publishes to the `next` dist-tag instead;
 install those with `@next` or an exact version.
 
 Adding a new plugin needs no workflow edits: create `plugins/<name>/` with a
-`package.json` (name `@k0d3r1s/bb-plugin-<name>`, `publishConfig.access: public`)
+`package.json` (name `@lettland/bb-plugin-<name>`, `publishConfig.access: public`)
 and a `bb` manifest, add it to `.bb/plugins.json`, and CI picks it up.

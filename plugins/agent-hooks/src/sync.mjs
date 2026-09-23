@@ -1,7 +1,7 @@
 // Copying the hook scripts from the plugin into their stable install path.
 //
 // Why a copy at all: the bb plugin cache is content-addressed
-// (~/.bb/plugins/cache/git/github.com/k0d3r1s/bb-plugins/<sha>/plugins/agent-hooks),
+// (~/.bb/plugins/cache/git/github.com/lettland/bb-plugins/<sha>/plugins/agent-hooks),
 // so wiring a provider config to the plugin directory would break on every
 // update. Provider configs point at ~/.bb/agent-hooks/ instead, and this keeps
 // that directory current.

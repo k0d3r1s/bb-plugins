@@ -1,5 +1,5 @@
 {
-  "name": "@k0d3r1s/bb-plugin-agent-hooks",
+  "name": "@lettland/bb-plugin-agent-hooks",
   "version": "0.1.0",
   "type": "module",
   "description": "bb owns the tool-call safety hooks and installs them into each provider; providers only execute them.",

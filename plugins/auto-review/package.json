@@ -1,5 +1,5 @@
 {
-  "name": "@k0d3r1s/bb-plugin-auto-review",
+  "name": "@lettland/bb-plugin-auto-review",
   "version": "0.1.3",
   "type": "module",
   "description": "Review, commit, and locally merge into a personal mainline (e.g. master) the changes an agent made this turn.",

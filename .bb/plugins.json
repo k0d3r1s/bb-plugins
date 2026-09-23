@@ -1,7 +1,7 @@
 {
   "$schema": "https://getbb.app/schemas/plugins.schema.json",
   "schemaVersion": 1,
-  "name": "k0d3r1s-plugins",
+  "name": "lettland-plugins",
   "plugins": [
     { "name": "auto-review", "source": "./plugins/auto-review" },
     { "name": "devkit", "source": "./plugins/devkit" },

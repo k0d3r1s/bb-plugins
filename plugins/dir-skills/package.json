@@ -1,5 +1,5 @@
 {
-  "name": "@k0d3r1s/bb-plugin-dir-skills",
+  "name": "@lettland/bb-plugin-dir-skills",
   "version": "0.1.1",
   "description": "Inject bb skills into a thread only when its workspace lives under a configured directory, for every provider.",
   "license": "MIT",
