@@ -96,8 +96,6 @@ test("a complete policy document with every optional field validates unchanged",
     dockerSocket: "/var/run/docker.sock",
     manifestPath: "/trusted/manifest.json",
     composeProject: "alpha_dev.1-x",
-    codegraphCommand: "/opt/codegraph/bin/codegraph",
-    codegraphRoot: "/opt/codegraph",
     bbCli: "/usr/local/bin/bb",
     containers: { app: "alpha_app", "db-2": "alpha.db-2" },
   });
@@ -106,11 +104,13 @@ test("a complete policy document with every optional field validates unchanged",
     dockerSocket: null,
     manifestPath: null,
     composeProject: null,
-    codegraphCommand: null,
-    codegraphRoot: null,
     bbCli: null,
   });
   assert.equal(validatePolicyDocument(nulled), nulled);
+  // Entries installed before CodeGraph was retired keep loading; the keys are
+  // ignored, even in shapes the old validator refused.
+  const legacy = policyDocument({ codegraphCommand: "bin/codegraph", codegraphRoot: "" });
+  assert.equal(validatePolicyDocument(legacy), legacy);
 });
 
 test("policy document validation rejects each malformed field with a specific reason", () => {
@@ -157,23 +157,6 @@ test("policy document validation rejects each malformed field with a specific re
     [{ containers: { App: "alpha_app" } }, /policy container role "App" is invalid/],
     [{ containers: { app: "-alpha" } }, /policy container app name is invalid/],
     [{ containers: { app: 7 } }, /policy container app name is invalid/],
-    [{ codegraphRoot: "/opt/codegraph" }, /CodeGraph command and root must be configured together/],
-    [
-      { codegraphCommand: "", codegraphRoot: "/opt/codegraph" },
-      /policy CodeGraph command is missing or invalid/,
-    ],
-    [
-      { codegraphCommand: "/opt/codegraph/bin/codegraph", codegraphRoot: "" },
-      /policy CodeGraph root is missing or invalid/,
-    ],
-    [
-      { codegraphCommand: "bin/codegraph", codegraphRoot: "/opt/codegraph" },
-      /policy CodeGraph paths must be absolute/,
-    ],
-    [
-      { codegraphCommand: "/opt/codegraph/bin/codegraph", codegraphRoot: "opt/codegraph" },
-      /policy CodeGraph paths must be absolute/,
-    ],
     [{ bbCli: "" }, /policy BB CLI is missing or invalid/],
     [{ bbCli: "bin/bb" }, /policy BB CLI must be absolute/],
   ];

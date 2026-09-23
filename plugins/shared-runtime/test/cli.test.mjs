@@ -266,8 +266,7 @@ test("install registers the checkout, pins the manifest, and installs the plugin
   assert.equal(policy.composeProject, "pform_dev");
   assert.equal(policy.manifestSha256, digest);
   assert.equal(policy.manifestPath, undefined);
-  assert.equal(policy.codegraphCommand, null);
-  assert.equal(policy.codegraphRoot, null);
+  assert.equal("codegraphCommand" in policy, false, "CodeGraph is retired and never pinned");
   assert.equal(policy.bbCli, path.join(fixture.bin, "bb"));
   assert.ok(!Number.isNaN(Date.parse(policy.installedAt)));
   assert.equal((await stat(fixture.policyPath())).mode & 0o777, 0o600);
@@ -297,7 +296,7 @@ test("install registers the checkout, pins the manifest, and installs the plugin
   assert.equal((await fixture.bbState()).reloads, 1);
 });
 
-test("install honours explicit options, docker contexts, and a pinned CodeGraph", async (t) => {
+test("install honours explicit options and docker contexts", async (t) => {
   const fixture = await createFixture(t, {
     plugins: [{ id: "shared-runtime" }],
   });
@@ -306,16 +305,6 @@ test("install honours explicit options, docker contexts, and a pinned CodeGraph"
     path.join(fixture.fixtureRoot, "bb-state.json"),
     JSON.stringify({ ...state, wrapPlugins: true }),
   );
-  const codegraphRoot = path.join(fixture.fixtureRoot, "codegraph-package");
-  await mkdir(path.join(codegraphRoot, "dist", "bin"), { recursive: true });
-  await writeFile(
-    path.join(codegraphRoot, "package.json"),
-    JSON.stringify({ name: "@colbymchenry/codegraph" }),
-  );
-  const codegraphEntry = path.join(codegraphRoot, "dist", "bin", "codegraph.js");
-  await writeFile(codegraphEntry, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-  await symlink(codegraphEntry, path.join(fixture.bin, "codegraph"));
-
   const externalManifest = path.join(fixture.fixtureRoot, "trusted.json");
   const document = JSON.parse(await readFile(fixtureManifestPath, "utf8"));
   document.containers.go.containerName = "explicit-go";
@@ -356,8 +345,6 @@ test("install honours explicit options, docker contexts, and a pinned CodeGraph"
   assert.equal(policy.composeProject, "custom");
   assert.equal(policy.dockerSocket, path.join(fixture.fixtureRoot, "relative.sock"));
   assert.equal(policy.worktreeRoot, otherWorktrees);
-  assert.equal(policy.codegraphCommand, codegraphEntry);
-  assert.equal(policy.codegraphRoot, codegraphRoot);
 
   const fromContext = await fixture.run(["install", "--no-reload"], {
     env: { DOCKER_HOST: undefined, FAKE_DOCKER_CONTEXT: "unix:///context/docker.sock" },
@@ -365,23 +352,19 @@ test("install honours explicit options, docker contexts, and a pinned CodeGraph"
   assert.equal(fromContext.code, 0, fromContext.stderr);
   assert.equal((await fixture.readPolicy()).dockerSocket, "/context/docker.sock");
 
-  await writeFile(path.join(codegraphRoot, "package.json"), JSON.stringify({ name: "codegraph-fork" }));
   const tcpContext = await fixture.run(["install", "--no-reload"], {
     env: { DOCKER_HOST: "tcp://127.0.0.1:2375", FAKE_DOCKER_CONTEXT: "tcp://remote:2376" },
   });
   assert.equal(tcpContext.code, 0, tcpContext.stderr);
   const tcpPolicy = await fixture.readPolicy();
   assert.equal(tcpPolicy.dockerSocket, null);
-  assert.equal(tcpPolicy.codegraphCommand, null, "an unrecognised package is not pinned");
 
-  await writeFile(path.join(codegraphRoot, "package.json"), "{ broken");
   const noContext = await fixture.run(["install", "--no-reload"], {
     env: { DOCKER_HOST: undefined, FAKE_DOCKER_CONTEXT: undefined },
   });
   assert.equal(noContext.code, 0, noContext.stderr);
   const noContextPolicy = await fixture.readPolicy();
   assert.equal(noContextPolicy.dockerSocket, null);
-  assert.equal(noContextPolicy.codegraphCommand, null, "an unreadable package is not pinned");
 });
 
 test("install refuses checkouts and projects it cannot trust", async (t) => {
@@ -526,15 +509,12 @@ test("install rejects ambiguous projects, unusable names, and unconfigured Git i
   assert.equal((await fixture.readPolicy("proj_named")).worktreeDirectoryName, "padded");
 });
 
-test("a bb CLI on PATH is found when BB_CLI is unset, stray codegraph binaries are ignored, and failures surface stderr", async (t) => {
+test("a bb CLI on PATH is found when BB_CLI is unset, and failures surface stderr", async (t) => {
   const fixture = await createFixture(t);
-  await writeFile(path.join(fixture.bin, "codegraph"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   const found = await fixture.run(["install", "--no-reload"]);
   assert.equal(found.code, 0, found.stderr);
   const policy = await fixture.readPolicy();
   assert.equal(policy.bbCli, path.join(fixture.bin, "bb"));
-  assert.equal(policy.codegraphCommand, null, "a codegraph outside any package is not pinned");
-  assert.equal(policy.codegraphRoot, null);
 
   await writeFile(path.join(fixture.fixtureRoot, "bb-state.json"), "{ corrupt");
   const crashed = await fixture.run(["install"]);

@@ -224,6 +224,5 @@
         }
       ]
     }
-  },
-  "codegraph": { "enabled": true }
+  }
 }

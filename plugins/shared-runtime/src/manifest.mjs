@@ -593,12 +593,6 @@ export function validateManifest(document) {
               allowRoot: true,
             }),
     }),
-    codegraph: Object.freeze({
-      enabled: document.codegraph === undefined ? true : assertOptionalBoolean(
-        document.codegraph?.enabled,
-        "codegraph.enabled",
-      ),
-    }),
     compose: Object.freeze({
       envFile:
         document.compose?.envFile === undefined

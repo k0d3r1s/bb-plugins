@@ -16,11 +16,6 @@ import {
 } from "./src/configuration.mjs";
 import { readProjectThread } from "./src/thread-read.mjs";
 import { readPluginResource } from "./src/plugin-resource.mjs";
-import {
-  CODEGRAPH_TOOL_NAMES,
-  codeGraphTools,
-  executeCodeGraphTool,
-} from "./src/codegraph.mjs";
 import { buildRuntimeGitTool } from "./src/git-tool.mjs";
 import { buildRuntimeOpsTool } from "./src/runtime-tool.mjs";
 
@@ -214,31 +209,6 @@ export default async function plugin(bb: BbPluginApi) {
       return resource.content;
     },
   });
-
-  for (const tool of codeGraphTools) {
-    if (!CODEGRAPH_TOOL_NAMES.includes(tool.name)) {
-      throw new Error(
-        `Shared runtime denied: unsupported CodeGraph tool ${tool.name}`,
-      );
-    }
-    bb.agents.registerTool({
-      name: tool.name,
-      description: tool.description,
-      instructions:
-        "This is a read-only bridge to the operator-installed CodeGraph index. The shared runtime binds every request to the current authorized checkout.",
-      presentation: {
-        label: { pending: "Querying CodeGraph", completed: "Queried CodeGraph" },
-        icon: { glyph: "Search" },
-      },
-      parameters: tool.parameters,
-      async execute(params: unknown, ctx) {
-        const { policy, workspace } = await workspaceFor(ctx.threadId);
-        return executeCodeGraphTool(policy, workspace, tool.name, params, {
-          signal: ctx.signal,
-        });
-      },
-    });
-  }
 
   registerRuntimeTool(bb, buildRuntimeGitTool({ workspaceFor }));
   registerRuntimeTool(

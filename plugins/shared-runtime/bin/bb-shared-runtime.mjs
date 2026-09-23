@@ -265,29 +265,6 @@ async function resolveDockerSocket(dockerPath, options) {
   return null;
 }
 
-async function resolveCodeGraph() {
-  const entry = await commandPath("codegraph");
-  if (!entry) {
-    return { command: null, root: null };
-  }
-  let root = path.dirname(entry);
-  while (root !== path.dirname(root) && !(await pathExists(path.join(root, "package.json")))) {
-    root = path.dirname(root);
-  }
-  if (root === path.dirname(root)) {
-    return { command: null, root: null };
-  }
-  try {
-    const manifest = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
-    if (manifest.name !== "@colbymchenry/codegraph") {
-      return { command: null, root: null };
-    }
-  } catch {
-    return { command: null, root: null };
-  }
-  return { command: entry, root };
-}
-
 async function resolveProject(cli, primaryRoot, options) {
   const projects = await bbJson(cli, ["project", "list"]);
   const matches = [];
@@ -418,7 +395,6 @@ async function commandInstall(options, { reloadByDefault }) {
   }
   const composeProject = await resolveComposeProject(manifest, primaryRoot, options);
   const dockerSocket = await resolveDockerSocket(dockerPath, options);
-  const codegraph = await resolveCodeGraph();
   const worktreeRoot = path.resolve(
     options.values["worktree-root"] ??
       process.env.BB_WORKTREES_ROOT ??
@@ -437,8 +413,6 @@ async function commandInstall(options, { reloadByDefault }) {
     containers: containerNames(manifest, composeProject),
     manifestSha256: loaded.digest,
     manifestPath: configuredManifestPath,
-    codegraphCommand: codegraph.command,
-    codegraphRoot: codegraph.root,
     bbCli: cli,
     installedAt: new Date().toISOString(),
   };

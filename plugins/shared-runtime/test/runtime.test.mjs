@@ -48,14 +48,9 @@ import {
 import {
   buildAgentConfiguration,
   buildAgentInstructions,
-  CODEGRAPH_TOOL_NAMES,
   rehydrateAgentContext,
   RUNTIME_TOOL_ALIASES,
 } from "../src/configuration.mjs";
-import {
-  CODEGRAPH_TOOL_NAMES as BRIDGED_CODEGRAPH_TOOL_NAMES,
-  executeCodeGraphTool,
-} from "../src/codegraph.mjs";
 import { readPluginResource } from "../src/plugin-resource.mjs";
 import { buildRuntimeGitTool, gitOperations } from "../src/git-tool.mjs";
 import {
@@ -2151,10 +2146,13 @@ test("agent tools are selected only for the authorized project and machine", () 
   );
   assert.doesNotMatch(instructions, /docker run/);
 
-  const withCodeGraph = buildAgentConfiguration(
+  // CodeGraph was retired; a registry entry still carrying its pinned command
+  // must not bring any codegraph_* tool back.
+  const withLegacyCodeGraph = buildAgentConfiguration(
     registryFor({
       ...policy,
       codegraphCommand: "/opt/codegraph/bin/codegraph",
+      codegraphRoot: "/opt/codegraph",
     }),
     {
       thread: { id: "thr_codegraph" },
@@ -2168,10 +2166,10 @@ test("agent tools are selected only for the authorized project and machine", () 
       },
     },
   );
-  assert.deepEqual(withCodeGraph.tools.slice(-CODEGRAPH_TOOL_NAMES.length), [
-    ...CODEGRAPH_TOOL_NAMES,
-  ]);
-  assert.deepEqual(CODEGRAPH_TOOL_NAMES, BRIDGED_CODEGRAPH_TOOL_NAMES);
+  assert.equal(
+    withLegacyCodeGraph.tools.some((name) => name.startsWith("codegraph_")),
+    false,
+  );
 
   for (const [projectId, hostId] of [
     ["proj_other", "host_vairogs"],
@@ -2354,100 +2352,6 @@ test("installed skill resources are readable only below an anchored skill root",
   await assert.rejects(
     readPluginResource({ path: hardLinked }, { allowedRoots: [allowedRoot] }),
     /bounded regular file/i,
-  );
-});
-
-test("CodeGraph bridge binds MCP calls to the authorized worktree", async (t) => {
-  const fixtureRoot = await realpath(
-    await mkdtemp(path.join(tmpdir(), "platform-codegraph-")),
-  );
-  t.after(async () => {
-    await import("node:fs/promises").then(({ rm }) =>
-      rm(fixtureRoot, { recursive: true, force: true }),
-    );
-  });
-  const codegraphRoot = path.join(fixtureRoot, "codegraph");
-  const command = path.join(codegraphRoot, "codegraph.mjs");
-  const workspaceRoot = path.join(fixtureRoot, "workspace");
-  await mkdir(codegraphRoot, { recursive: true });
-  await mkdir(workspaceRoot, { recursive: true });
-  await writeFile(
-    command,
-    `#!/usr/bin/env node
-import readline from "node:readline";
-const lines = readline.createInterface({ input: process.stdin });
-for await (const line of lines) {
-  const message = JSON.parse(line);
-  if (message.method === "initialize") {
-    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: "2024-11-05", capabilities: {} } }) + "\\n");
-  } else if (message.method === "tools/call") {
-    const result = message.params.name === "codegraph_context"
-      ? { isError: true, content: [{ type: "text", text: "Unknown tool codegraph_context" }] }
-      : { content: [{ type: "text", text: JSON.stringify(message.params) }] };
-    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }) + "\\n");
-  }
-}
-`,
-    { mode: 0o755 },
-  );
-
-  let childEnvironment;
-  process.env.BB_PLATFORM_TEST_SECRET = "must-not-reach-codegraph";
-  const output = await executeCodeGraphTool(
-    { codegraphCommand: command, codegraphRoot },
-    { hostRoot: workspaceRoot },
-    "codegraph_search",
-    { query: "Router", projectPath: "/untrusted" },
-    {
-      timeoutMs: 5000,
-      spawn(...args) {
-        childEnvironment = args[2].env;
-        return spawnChild(...args);
-      },
-    },
-  );
-  delete process.env.BB_PLATFORM_TEST_SECRET;
-  const forwarded = JSON.parse(output);
-  assert.equal(forwarded.name, "codegraph_search");
-  assert.equal(forwarded.arguments.query, "Router");
-  assert.equal(forwarded.arguments.projectPath, workspaceRoot);
-  assert.equal(childEnvironment.BB_PLATFORM_TEST_SECRET, undefined);
-  assert.equal(childEnvironment.CODEGRAPH_MCP_TOOLS.includes("explore"), true);
-  assert.equal(childEnvironment.CODEGRAPH_MCP_TOOLS.includes("context"), true);
-
-  const contextOutput = await executeCodeGraphTool(
-    { codegraphCommand: command, codegraphRoot },
-    { hostRoot: workspaceRoot },
-    "codegraph_context",
-    { task: "trace router construction", maxNodes: 30 },
-    { timeoutMs: 5000 },
-  );
-  const contextForwarded = JSON.parse(contextOutput);
-  assert.equal(contextForwarded.name, "codegraph_explore");
-  assert.equal(contextForwarded.arguments.query, "trace router construction");
-  assert.equal(contextForwarded.arguments.maxFiles, 3);
-  assert.equal(contextForwarded.arguments.projectPath, workspaceRoot);
-
-  await assert.rejects(
-    executeCodeGraphTool(
-      { codegraphCommand: command, codegraphRoot },
-      { hostRoot: workspaceRoot },
-      "codegraph_node",
-      { file: "../outside" },
-      { timeoutMs: 5000 },
-    ),
-    /escapes the authorized workspace/i,
-  );
-
-  await assert.rejects(
-    executeCodeGraphTool(
-      { codegraphCommand: command, codegraphRoot: workspaceRoot },
-      { hostRoot: workspaceRoot },
-      "codegraph_search",
-      { query: "Router" },
-      { timeoutMs: 5000 },
-    ),
-    /paths changed|denied/i,
   );
 });
 
@@ -2707,17 +2611,11 @@ test("policy loading verifies the protected policy descriptor", async (t) => {
   assert.equal(loaded.runtimeRoot, runtimeRoot);
   assert.equal((await stat(policyPath)).mode & 0o777, 0o600);
 
-  policyDocument.codegraphCommand = path.join(
-    fixtureRoot,
-    "codegraph",
-    "bin",
-    "codegraph",
-  );
+  // Entries written before CodeGraph was retired still carry its keys; they
+  // are ignored rather than refused, so existing installs keep loading.
+  policyDocument.codegraphCommand = path.join(fixtureRoot, "codegraph", "bin", "codegraph");
   await writeFile(policyPath, `${JSON.stringify(policyDocument)}\n`);
-  await assert.rejects(
-    loadPolicy(policyPath),
-    /CodeGraph command and root must be configured together/i,
-  );
+  await loadPolicy(policyPath);
   delete policyDocument.codegraphCommand;
 
   policyDocument.composeProject = "null";

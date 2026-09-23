@@ -23,18 +23,6 @@ export const RUNTIME_TOOL_NAMES = Object.freeze([
   ...Object.values(RUNTIME_TOOL_ALIASES),
 ]);
 
-export const CODEGRAPH_TOOL_NAMES = Object.freeze([
-  "codegraph_search",
-  "codegraph_context",
-  "codegraph_callers",
-  "codegraph_callees",
-  "codegraph_impact",
-  "codegraph_node",
-  "codegraph_explore",
-  "codegraph_status",
-  "codegraph_files",
-]);
-
 const INSTRUCTION_LIMIT = 4000;
 
 export function buildAgentInstructions(policy) {
@@ -42,7 +30,7 @@ export function buildAgentInstructions(policy) {
   const lines = [
     `This ${projectLabel} thread uses one shared container runtime for repository language toolchains and quality commands. Run tests, lint, formatting, static analysis, and project-language commands through runtime_container, and manage the shared Docker stack through runtime_ops. Quality operations require a managed worktree and are write-confined to it. Do not ask the user to switch to the primary checkout, run Docker, reinstall the plugin, or reload it for an agent task.`,
     "Normal Git and the host bb CLI remain available under the provider's ordinary capability model; runtime_git and runtime_thread are fixed convenience operations, not blanket prohibitions. Never push, tag, force-update, reset, delete, mutate sibling worktrees, or create merge commits. Provider lifecycle hooks and configured MCP or plugin servers may spawn host child processes normally.",
-    "Installed agent skills are agent-wide and may be read with the provider's native file tools; runtime_skill_resource is an optional bounded reader when it is available. Use injected MCP and CodeGraph tools directly rather than replacing shared-container repository commands with host project toolchains.",
+    "Installed agent skills are agent-wide and may be read with the provider's native file tools; runtime_skill_resource is an optional bounded reader when it is available. Use injected MCP tools directly rather than replacing shared-container repository commands with host project toolchains.",
   ];
   if (policy?.manifest) {
     const operations = describeOperations(policy.manifest);
@@ -72,12 +60,7 @@ export function buildAgentConfiguration(registry, context) {
 
   return {
     policy,
-    tools: [
-      ...RUNTIME_TOOL_NAMES,
-      ...(policy.codegraphCommand && policy.manifest?.codegraph.enabled !== false
-        ? CODEGRAPH_TOOL_NAMES
-        : []),
-    ],
+    tools: [...RUNTIME_TOOL_NAMES],
     context: {
       projectId: context.project.id,
       hostId: context.host.id,

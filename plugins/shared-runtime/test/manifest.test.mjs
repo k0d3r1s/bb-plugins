@@ -394,7 +394,6 @@ const invalidManifests = [
   ["a non-object worktrees block", minimal({ worktrees: {} }), /worktrees\.containerRoot must be a non-empty string/],
   ["a relative worktree root", minimal({ worktrees: { containerRoot: "bb" } }), /worktrees\.containerRoot must be an absolute container path/],
   ["an option-like search path", minimal({ search: { defaultPath: "-src" } }), /search\.defaultPath must be a repository-relative POSIX path/],
-  ["a non-boolean codegraph flag", minimal({ codegraph: { enabled: "yes" } }), /codegraph\.enabled must be a boolean/],
   ["a compose env file at the root", minimal({ compose: { envFile: "." } }), /compose\.envFile may not be the repository root/],
   ["an empty compose variable", minimal({ compose: { projectVariable: "" } }), /compose\.projectVariable must be a non-empty string/],
   ["a lowercase compose variable", minimal({ compose: { projectVariable: "project" } }), /compose\.projectVariable must be an environment variable name/],
@@ -500,7 +499,8 @@ test("host placeholders and defaults are resolved by section", () => {
     minimal({
       name: "Fixture",
       worktrees: { containerRoot: "/wt/" },
-      codegraph: { enabled: false },
+      // Retired CodeGraph block, still present in committed manifests: ignored.
+      codegraph: { enabled: "yes" },
       compose: { envFile: "docker/.env", projectVariable: "COMPOSE_PROJECT" },
       scratch: { cache: null, "go-mod": { env: ["GOMODCACHE"] } },
       containers: {
@@ -514,7 +514,7 @@ test("host placeholders and defaults are resolved by section", () => {
   );
   assert.equal(manifest.name, "Fixture");
   assert.equal(manifest.worktrees.containerRoot, "/wt");
-  assert.equal(manifest.codegraph.enabled, false);
+  assert.equal("codegraph" in manifest, false);
   assert.deepEqual(manifest.compose, { envFile: "docker/.env", projectVariable: "COMPOSE_PROJECT" });
   assert.deepEqual(manifest.scratch.cache.environment, []);
   assert.deepEqual(manifest.scratch["go-mod"].environment, ["GOMODCACHE"]);
@@ -544,7 +544,6 @@ test("host placeholders and defaults are resolved by section", () => {
   assert.equal(defaults.isolation, null);
   assert.equal(defaults.worktrees.containerRoot, DEFAULT_WORKTREE_CONTAINER_ROOT);
   assert.equal(defaults.search.defaultPath, ".");
-  assert.equal(defaults.codegraph.enabled, true);
   assert.deepEqual(defaults.compose, { envFile: null, projectVariable: null });
   assert.deepEqual(defaults.lifecycle, {});
   assert.deepEqual(defaults.operations, {});

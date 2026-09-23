@@ -129,20 +129,6 @@ export function validatePolicyDocument(parsed) {
       deny(`policy container ${role} name is invalid`);
     }
   }
-  const hasCodeGraphCommand =
-    parsed.codegraphCommand !== null && parsed.codegraphCommand !== undefined;
-  const hasCodeGraphRoot =
-    parsed.codegraphRoot !== null && parsed.codegraphRoot !== undefined;
-  if (hasCodeGraphCommand !== hasCodeGraphRoot) {
-    deny("policy CodeGraph command and root must be configured together");
-  }
-  if (hasCodeGraphCommand) {
-    assertNonEmptyString(parsed.codegraphCommand, "policy CodeGraph command");
-    assertNonEmptyString(parsed.codegraphRoot, "policy CodeGraph root");
-    if (!path.isAbsolute(parsed.codegraphCommand) || !path.isAbsolute(parsed.codegraphRoot)) {
-      deny("policy CodeGraph paths must be absolute");
-    }
-  }
   if (
     parsed.bbCli !== undefined &&
     parsed.bbCli !== null &&

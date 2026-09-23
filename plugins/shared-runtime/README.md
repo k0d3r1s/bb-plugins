@@ -14,7 +14,6 @@ The plugin gives agent threads a small set of typed tools:
 | `runtime_search` | Workspace-confined literal search with ripgrep. |
 | `runtime_thread` | Read bounded output from one same-project thread. |
 | `runtime_skill_resource` | Read one file from an installed agent skill. |
-| `codegraph_*` | Optional bridge to an operator-installed CodeGraph index bound to the current checkout. |
 
 The legacy `platform_*` names remain registered as aliases so active threads can move from Platform Runtime without restarting or reinstalling the retired plugin.
 
@@ -114,8 +113,7 @@ registered project; `bb-shared-runtime uninstall` removes one.
       ],
       "hardlinks": [{ "source": "profile/public/README.md", "target": "profile/private/README.md" }]
     }
-  },
-  "codegraph": { "enabled": true }
+  }
 }
 ```
 
@@ -168,8 +166,6 @@ plugin refuses entries with other permissions, symlinks, or hard links.
   "composeProject": "pform_dev",
   "containers": { "go": "pform_dev_tracigo_go", "sveltekit": "pform_dev_sveltekit", "symfony": "pform_dev_zts" },
   "manifestSha256": "…",
-  "codegraphCommand": null,
-  "codegraphRoot": null,
   "bbCli": "/Applications/bb.app/…/bb"
 }
 ```
@@ -182,5 +178,5 @@ node --test test/
 
 The suite covers workspace mapping, plan compilation from the Platform fixture manifest,
 target validation, isolation probes, dependency preparation, the reader-writer project locks
-(including the shell reload helper), agent configuration, registry loading, thread reads, the
-CodeGraph bridge, and the CLI's registry-free commands.
+(including the shell reload helper), agent configuration, registry loading, thread reads, and
+the CLI's registry-free commands.
