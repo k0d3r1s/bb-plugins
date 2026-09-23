@@ -31,6 +31,18 @@ INSTALLED_PLUGINS = [
     HOME / ".claude" / "plugins" / "installed_plugins.json",
     HOME / ".claude-work" / "plugins" / "installed_plugins.json",
 ]
+# Separate from settings.json's extraKnownMarketplaces: this is the plugin
+# manager's own registry, and a stale entry here leaves the marketplace listed
+# after the plugin is gone.
+KNOWN_MARKETPLACES = [
+    HOME / ".claude" / "plugins" / "known_marketplaces.json",
+    HOME / ".claude-work" / "plugins" / "known_marketplaces.json",
+]
+# The cloned marketplace repo, ~4.5 MB per profile, kept alongside the plugin cache.
+MARKETPLACE_CLONES = [
+    HOME / ".claude" / "plugins" / "marketplaces" / "valksor-k0d3",
+    HOME / ".claude-work" / "plugins" / "marketplaces" / "valksor-k0d3",
+]
 CODEX_CONFIG = HOME / ".codex" / "config.toml"
 CACHES = [
     HOME / ".claude" / "plugins" / "cache" / "valksor-k0d3",
@@ -83,6 +95,15 @@ def drop_from_settings(data: dict, notes: list[str]) -> bool:
         notes.append(f"  removed extraKnownMarketplaces['{MARKET_KEY}']")
         changed = True
     return changed
+
+
+def drop_from_known_marketplaces(data: dict, notes: list[str]) -> bool:
+    """known_marketplaces.json is a flat map keyed by marketplace name."""
+    if MARKET_KEY in data:
+        del data[MARKET_KEY]
+        notes.append(f"  removed marketplace '{MARKET_KEY}'")
+        return True
+    return False
 
 
 def drop_from_installed(data: dict, notes: list[str]) -> bool:
@@ -155,12 +176,17 @@ def main() -> int:
         for note in edit_json(p, drop_from_installed, dry):
             print(note if note.startswith(" ") else f"  {note}")
 
+    print("\nknown_marketplaces.json:")
+    for p in KNOWN_MARKETPLACES:
+        for note in edit_json(p, drop_from_known_marketplaces, dry):
+            print(note if note.startswith(" ") else f"  {note}")
+
     print("\ncodex config.toml:")
     for note in clean_codex(dry):
         print(note if note.startswith(" ") else f"  {note}")
 
-    print("\nplugin caches:")
-    for c in CACHES:
+    print("\nplugin caches and marketplace clones:")
+    for c in CACHES + MARKETPLACE_CLONES:
         if not c.exists():
             print(f"  skip (absent): {c}")
             continue
