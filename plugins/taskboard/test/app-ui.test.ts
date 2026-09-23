@@ -1,0 +1,300 @@
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { test } from 'node:test';
+
+const app = await readFile(new URL('../app.tsx', import.meta.url), 'utf8');
+
+test('registers Taskboard for existing-thread and New Thread right panels', () => {
+  assert.match(app, /app\.slots\.threadPanelAction\(\{[\s\S]*?id: THREAD_PANEL_ACTION_ID[\s\S]*?component: TaskboardThreadPanel[\s\S]*?layout: 'flush'/u);
+  assert.match(app, /app\.slots\.experimental_newThreadPanelAction\(\{[\s\S]*?id: 'taskboard-new-thread-panel'[\s\S]*?component: TaskboardNewThreadPanel[\s\S]*?layout: 'flush'/u);
+  assert.match(app, /function TaskboardNewThreadPanel\(\{ projectId \}[\s\S]*?<TaskboardRightPanel projectId=\{projectId\}/u);
+  assert.match(app, /surfaceMode="constrained"/u);
+});
+
+test('accepts bounded Taskboard drops only on the visible composer textbox', () => {
+  const dropHook = app.match(
+    /function useTaskboardComposerDrop[\s\S]*?\nfunction TaskboardRightPanel/u
+  )?.[0];
+  assert.ok(dropHook, 'Missing useTaskboardComposerDrop');
+  assert.match(dropHook, /hasTaskboardComposerDragType\(transfer\.types\)/u);
+  assert.match(app, /\[contenteditable="true"\]\[role="textbox"\]/u);
+  assert.match(dropHook, /parseTaskboardComposerMention/u);
+  assert.match(dropHook, /event\.preventDefault\(\)/u);
+  assert.match(dropHook, /event\.stopImmediatePropagation\(\)/u);
+  assert.match(dropHook, /transfer\.dropEffect = 'copy'/u);
+  assert.match(dropHook, /COMPOSER_DROP_CUE_TEXT/u);
+  assert.match(dropHook, /clearTarget\(\)/u);
+
+  const insertion = app.match(
+    /const insertComposerMention = useCallback[\s\S]*?useTaskboardComposerDrop\(insertComposerMention\)/u
+  )?.[0];
+  assert.ok(insertion, 'Missing route-bound composer insertion');
+  assert.match(insertion, /serializeTaskboardComposerMention/u);
+  assert.match(insertion, /composer\.insertMention\(safeMention\)/u);
+  assert.match(insertion, /composer\.focus\(\)/u);
+  assert.match(insertion, /setComposerAnnouncement\(`Added/u);
+  assert.doesNotMatch(insertion, /toCompose|spawn|submit|send|queue|steer/u);
+});
+
+test('makes constrained List and Kanban tickets composer drag sources', () => {
+  const row = app.match(/function WorkItemRow[\s\S]*?\nfunction ListStateGroups/u)?.[0];
+  assert.ok(row, 'Missing WorkItemRow');
+  assert.match(row, /draggable=\{composerDragEnabled\}/u);
+  assert.match(row, /writeTaskboardComposerDrag\(event\.dataTransfer, item, 'copy'\)/u);
+  assert.match(row, /name="DragDropVertical"/u);
+  assert.match(app, /composerDragEnabled=\{surfaceMode === 'constrained'\}/u);
+
+  const kanban = app.match(/function KanbanBoard[\s\S]*?\nfunction TrackerList/u)?.[0];
+  assert.ok(kanban, 'Missing KanbanBoard');
+  assert.match(kanban, /event\.dataTransfer\.effectAllowed = composerDragEnabled[\s\S]*?'copyMove'[\s\S]*?: 'move'/u);
+  assert.match(kanban, /event\.dataTransfer\.setData\('text\/plain', itemId\)/u);
+  assert.match(kanban, /writeTaskboardComposerDrag\([\s\S]*?'copyMove'/u);
+  assert.match(kanban, /void commitMove\(item, lane\.key/u);
+});
+
+test('offers an accessible non-drag Add to chat detail action', () => {
+  const detail = app.match(/function TrackerDetail[\s\S]*?\nfunction configFingerprint/u)?.[0];
+  assert.ok(detail, 'Missing TrackerDetail');
+  assert.match(detail, /type="button"[\s\S]*?variant="outline"[\s\S]*?onClick=\{\(\) => onAddToComposer\(item\)\}/u);
+  assert.match(detail, /MessageCirclePlus/u);
+  assert.match(detail, /Add to chat/u);
+  assert.match(app, /role="status"[\s\S]*?aria-live="polite"[\s\S]*?\{composerAnnouncement\}/u);
+});
+
+test('shares durable project preferences between full and constrained surfaces', () => {
+  assert.match(app, /useSyncExternalStore\(/u);
+  assert.match(app, /browsePreferenceStore\.subscribe/u);
+  assert.match(app, /projectBrowseScope\(projectId\)/u);
+  assert.match(app, /surfaceMode=\{narrow \? 'constrained' : 'full'\}/u);
+  assert.match(app, /surfaceMode="constrained"/u);
+  assert.doesNotMatch(app, /right-panel:\$\{projectId\}/u);
+  assert.match(app, /const \[committedQuery, setCommittedQuery\] = useState\(\(\) => query\.trim\(\)\)/u);
+  assert.match(app, /updatePreferences\(current => \(\{ \.\.\.current, query: nextQuery \}\)\)/u);
+  assert.doesNotMatch(app, /const \[query, setQuery\] = useState/u);
+  assert.match(app, /maxLength=\{MAX_BROWSE_QUERY_LENGTH\}/u);
+});
+
+test('canonicalizes provider facet casing before rendering and persistence', () => {
+  assert.match(app, /canonicalizeSelectedFilterOptions/u);
+  assert.match(app, /isFilterOptionSelected/u);
+  assert.match(app, /toggleFilterOptionSelection/u);
+  assert.match(app, /sameStringValues\(current\.assignees, nextAssignees\)/u);
+});
+
+test('applies project presets through the released preference store', () => {
+  assert.match(app, /useProjectFilterPresets\(projectId\)/u);
+  assert.match(app, /useRealtime\('taskboard:presets-changed'/u);
+  assert.match(app, /projectIdRef\.current !== projectId/u);
+  assert.match(app, /loadedProjectId === projectId/u);
+  assert.match(app, /projectId === null \? null : presetState\.presets/u);
+  assert.match(app, /preset\.projectId !== projectId/u);
+  assert.match(app, /preset\.state\.provider !== authoritativeProvider/u);
+  assert.match(app, /browsePreferenceStore\.set\(preferenceScope, preset\.state\)/u);
+  assert.doesNotMatch(app, /setCommittedQuery\(preset\.state\.query/u);
+  assert.match(app, /state: preferences/u);
+  assert.match(app, /Could not load presets:/u);
+  assert.match(app, /Save current view as/u);
+  assert.match(app, /mutationInFlightRef/u);
+  assert.match(app, /value=\{nameDrafts\[preset\.id\] \?\? preset\.name\}/u);
+});
+
+test('keeps preset refreshes, drafts, and focus non-disruptive', () => {
+  const hook = app.match(
+    /function useProjectFilterPresets[\s\S]*?\nfunction loadRightPanelPinned/u
+  )?.[0];
+  assert.ok(hook, 'Missing project preset hook');
+  assert.ok(
+    [...hook.matchAll(/void reload\(\{ background: true \}\)/gu)].length >= 3,
+    'Realtime, reconnect, and mutation reconciliation must stay in the background'
+  );
+  assert.match(hook, /if \(options\.background\) \{\s*setRefreshError\(message\)/u);
+  assert.doesNotMatch(
+    hook,
+    /if \(options\.background\) \{[^}]*setPresets\(\[\]\)/u
+  );
+  assert.match(app, /Keeping your loaded presets and edits/u);
+  assert.match(app, /authoritativeNamesRef/u);
+  assert.match(app, /presetActionButtonRefs/u);
+  assert.match(app, /restorePresetFocus\(preset\.id/u);
+  assert.match(app, /flex min-w-0 flex-col gap-1\.5 @sm:flex-row/u);
+  assert.match(app, /max-md:pointer-coarse:h-10 max-md:pointer-coarse:w-10/u);
+});
+
+test('announces preset apply and keeps save errors with the draft', () => {
+  assert.match(app, /toast\.success\(`Applied preset/u);
+  assert.match(app, /<DialogDescription id=\{presetSaveDescriptionId\}>/u);
+  assert.match(app, /setPresetSaveError\(message\)/u);
+  assert.match(app, /aria-invalid=\{presetSaveError !== null\}/u);
+  assert.match(app, /id=\{presetSaveErrorId\}[\s\S]*?role="alert"/u);
+});
+
+test('keeps List measured and Kanban unconstrained', () => {
+  assert.match(app, /data-taskboard-list-measure/u);
+  assert.match(app, /max-w-\[56rem\]/u);
+  assert.match(app, /data-taskboard-state-glyph/u);
+  assert.doesNotMatch(app, /max-w-\[110rem\]/u);
+  assert.match(app, /aria-expanded=\{!collapsed\}/u);
+  const glyph = app.match(
+    /function WorkStateGlyph[\s\S]*?\nfunction SidebarRow/u
+  )?.[0];
+  assert.ok(glyph, 'Missing WorkStateGlyph implementation');
+  assert.doesNotMatch(glyph, /data-status-tone/u);
+  assert.doesNotMatch(glyph, /workflowStatusTone/u);
+  assert.match(app, /disabled=\{searchActive\}/u);
+});
+
+test('renders assignees as deterministic accessible avatars', () => {
+  assert.match(app, /assigneeAvatarIdentity\(assignee\)/u);
+  assert.match(app, /role="img"/u);
+  assert.match(app, /aria-label=\{`Assigned to \$\{assignee\}`\}/u);
+  assert.match(app, /data-assignee-tone=\{identity\.tone\}/u);
+  assert.match(app, /<span aria-hidden="true">\{identity\.initials\}<\/span>/u);
+});
+
+test('uses an explicit constrained filter composition', () => {
+  assert.match(app, /data-taskboard-filter-mode="constrained"/u);
+  assert.match(app, /Search filter values/u);
+  assert.match(app, /Filters\{activeFacetCount/u);
+  assert.match(app, /active filter/u);
+  assert.match(app, /--radix-dropdown-menu-content-available-height/u);
+  assert.match(app, /min-h-0 flex-1 overflow-x-hidden overflow-y-auto/u);
+  assert.match(app, /shrink-0 border-t border-border bg-popover/u);
+  assert.match(app, /facetSearchRef/u);
+  assert.match(app, /onOpenAutoFocus/u);
+  assert.match(app, /event\.preventDefault\(\)/u);
+  assert.match(app, /No matching values/u);
+  assert.match(app, /data-taskboard-filter-values/u);
+  assert.match(app, /overflow-x-hidden overflow-y-auto/u);
+});
+
+test('centralizes and reuses decorative filter icons across surfaces', () => {
+  const filters = [
+    'source',
+    'state',
+    'status',
+    'assignee',
+    'priority',
+    'project',
+    'labels'
+  ];
+
+  assert.match(app, /type FilterPresentationKey = 'source' \| WorkItemFilterField/u);
+  assert.match(
+    app,
+    /satisfies Record<FilterPresentationKey, FilterPresentation>/u
+  );
+  assert.match(app, /BOARD_FILTER_FIELDS\.map\(field =>/u);
+  assert.deepEqual(
+    [...app.matchAll(/<FilterSectionLabel filter="([^"]+)"/gu)].map(
+      match => match[1]
+    ),
+    filters
+  );
+  for (const filter of filters) {
+    assert.match(
+      app,
+      new RegExp(`icon=\\{FILTER_PRESENTATION\\.${filter}\\.icon\\}`)
+    );
+    assert.match(
+      app,
+      new RegExp(`label=\\{FILTER_PRESENTATION\\.${filter}\\.label\\}`)
+    );
+  }
+  assert.match(app, /name=\{presentation\.icon\}[\s\S]*?aria-hidden="true"/u);
+  assert.match(app, /name=\{option\.icon\}[\s\S]*?aria-hidden="true"/u);
+  assert.doesNotMatch(app, /<DropdownMenuLabel>(?:Source|State group|Status|Assignee|Priority|External project|Labels)<\/DropdownMenuLabel>/u);
+});
+
+test('supports direct and manual composer capture through one dialog', () => {
+  assert.match(app, /mode: 'direct'/u);
+  assert.match(app, /mode: 'composer-assisted'/u);
+  assert.match(app, /mode="direct"/u);
+  assert.match(app, /mode="composer-assisted"/u);
+  assert.match(app, /getCreateIssueMetadata/u);
+  assert.match(app, /loadedMetadataScope === currentMetadataScope/u);
+  assert.match(app, /loadedConnectorRevision !== null/u);
+  assert.match(app, /createOutcomeUncertain/u);
+  assert.match(app, /CREATE_OUTCOME_UNCERTAIN_MARKER/u);
+  assert.match(app, /restoreRememberedCreateAssignee/u);
+  assert.match(app, /rememberCreateAssigneeAfterSuccess/u);
+  assert.match(app, /assigneeConfirmation: AssigneeConfirmation/u);
+  assert.match(app, /'New issue'/u);
+
+  const createBody = app.match(
+    /const create = async[\s\S]*?\n  const canSubmit/u
+  )?.[0];
+  assert.ok(createBody, 'Missing create submit implementation');
+  const createCallIndex = createBody.indexOf("rpc.call('createIssue'");
+  const rememberIndex = createBody.indexOf(
+    'rememberCreateAssigneeAfterSuccess('
+  );
+  assert.ok(createCallIndex >= 0, 'Missing createIssue RPC call');
+  assert.ok(rememberIndex >= 0, 'Missing success-bound remembered-assignee write');
+  assert.ok(
+    rememberIndex < createCallIndex,
+    'The create RPC must be wrapped by the success-bound persistence helper'
+  );
+  assert.match(app, /context\.projectName.*sourceName\(context\.source\).*New issue/su);
+  assert.match(app, /Couldn&apos;t load creation options/u);
+  assert.match(app, /role="alert"/u);
+  assert.match(app, /aria-describedby=\{metadataError \? metadataErrorId/u);
+  assert.match(app, /if \(!result\.ok\)/u);
+  assert.match(app, /result\.error\.safeMessage/u);
+  assert.match(app, /CREATE_METADATA_NETWORK_ERROR/u);
+});
+
+test('captures the original composer prompt locally exactly once per open', () => {
+  const initialization = app.match(
+    /const initializedForOpenRef = useRef\(false\);[\s\S]*?\}, \[assisted, initialPrompt, open\]\);/u
+  )?.[0];
+  assert.ok(initialization, 'Missing one-time prompt initialization');
+  assert.match(initialization, /if \(!open\) \{\s*initializedForOpenRef\.current = false/u);
+  assert.match(initialization, /if \(initializedForOpenRef\.current\) return/u);
+  assert.match(initialization, /setTitle\(assisted \? titleFromPrompt\(initialPrompt\) : ''\)/u);
+  assert.match(initialization, /setDescription\(assisted \? initialPrompt\.trim\(\) : ''\)/u);
+
+  const contextLoad = app.match(
+    /useEffect\(\(\) => \{\s*if \(!open\) return;[\s\S]*?\}, \[open, projectId, rpc\]\);/u
+  )?.[0];
+  assert.ok(contextLoad, 'Missing provider context loading effect');
+  assert.doesNotMatch(contextLoad, /setTitle|setDescription/u);
+  assert.match(app, /const \[capturedPrompt, setCapturedPrompt\] = useState<string \| null>\(null\)/u);
+  assert.match(app, /setCapturedPrompt\(view\.draft\.text\)/u);
+  assert.match(app, /initialPrompt=\{capturedPrompt\}/u);
+  assert.match(app, /Prompt copied for review/u);
+  assert.match(app, /copied into these editable fields/u);
+  assert.match(app, /Nothing\s*is\s+created until you select Create/u);
+  assert.ok(
+    [...app.matchAll(/\{assisted \? editablePromptFields : null\}/gu)].length >= 3,
+    'Captured fields must remain visible while the provider loads or is unavailable'
+  );
+  assert.match(app, /<form id=\{formId\}[\s\S]*?onSubmit=\{create\}/u);
+});
+
+test('contains no frontend issue-drafting lifecycle or generation copy', () => {
+  assert.doesNotMatch(
+    app,
+    /startIssueDraft|getIssueDraft|cancelIssueDraft|IssueDraftRecord|draftRequestId|onRegenerate|randomUUID/u
+  );
+  assert.doesNotMatch(
+    app,
+    /Structuring your issue|A model|drafting model|Repository-aware draft|Drafted with repository context|Try repository draft again/u
+  );
+});
+
+test('routes detail handoff through the external-content trust boundary', () => {
+  assert.match(app, /const prompt = formatWorkItemHandoffPrompt\(item\)/u);
+  assert.doesNotMatch(app, /const prompt = \[\s*`Work on \$\{sourceName/u);
+});
+
+test('renders comments as one conversation rail', () => {
+  assert.match(app, /tb-comment-rail/u);
+  assert.match(app, /tb-comment-entry/u);
+  assert.doesNotMatch(app, /tb-comment-card rounded-lg border/u);
+  assert.match(app, /activeItemRoute \? 'overflow-y-auto' : 'overflow-hidden'/u);
+});
+
+test('reconciles provider identity from the cached-list response', () => {
+  assert.match(app, /const provider = result\.provider/u);
+  assert.doesNotMatch(app, /rpc\.call\('status', \{ projectId \}\)/u);
+});
