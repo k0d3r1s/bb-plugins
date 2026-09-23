@@ -19,6 +19,10 @@ export const FIRE_REASONS = [
   "send-failed",
   "not-a-branch",
   "status-unavailable",
+  "plan-review",
+  "plan-reviewed",
+  "plan-hold-expired",
+  "commit-plan",
 ] as const;
 export type FireReason = (typeof FIRE_REASONS)[number];
 
@@ -81,7 +85,7 @@ export function defineAutoReviewSettings(bb: BbPluginApi) {
       type: "select",
       label: "Review mode",
       description:
-        "auto: use a review-code workflow if present, else self-review. devkit: require the devkit review-code workflow. self: always self-review.",
+        "How plans and code changes are reviewed. auto: devkit's calibrated review when its devkit_load_skill tool is available, else self-review. devkit: require devkit's review. self: always self-review.",
       options: [...REVIEW_MODES],
       default: "auto",
     },

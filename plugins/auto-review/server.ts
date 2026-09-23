@@ -26,18 +26,25 @@ import {
   mainlineBase,
 } from "./src/detect.js";
 import {
-  hasActiveSibling,
+  hasBusyCodingSibling,
   hasReviewInFlight,
+  isBusyStatus,
   passesThreadGate,
   pickDeferredRelease,
   selfIsWorktree,
   type GateThread,
-  type SiblingPhase,
+  type SiblingReview,
 } from "./src/gate.js";
-import { buildReviewPrompt, renderScope } from "./src/prompt.js";
+import { planApprovalOf, planGateAction, type PlanApproval } from "./src/plan.js";
 import {
-  deferralExpired,
+  buildPlanReviewPrompt,
+  buildReviewPrompt,
+  renderScope,
+} from "./src/prompt.js";
+import {
   isStale,
+  PLAN_GATE_KEYS,
+  planHoldExpired,
   readState,
   REVIEW_IN_FLIGHT_PHASES,
   resetToIdlePatch,
@@ -106,7 +113,7 @@ export default async function plugin(bb: BbPluginApi) {
 
   /**
    * Park this turn instead of dropping it. The turn-start cursor is left in
-   * place, so when the checkout goes quiet the review still covers the work
+   * place, so when the blocking review ends this review still covers the work
    * this turn authored — and `thread.active` carries that cursor forward if
    * the thread takes another turn in the meantime.
    */
@@ -139,21 +146,22 @@ export default async function plugin(bb: BbPluginApi) {
     );
   }
 
-  /** Every other thread in this environment, paired with its auto-review phase. */
-  async function siblingPhases(
-    environmentId: string,
+  async function listEnvironment(environmentId: string) {
+    return bb.sdk.threads.list({ environmentId, includeHidden: true });
+  }
+
+  /** Every other thread in this environment, paired with its auto-review state. */
+  async function siblingReviews(
+    entries: Awaited<ReturnType<typeof listEnvironment>>,
     selfThreadId: string,
-  ): Promise<SiblingPhase[]> {
-    const entries = await bb.sdk.threads.list({
-      environmentId,
-      includeHidden: true,
-    });
+  ): Promise<SiblingReview[]> {
     return Promise.all(
       entries
         .filter((entry) => entry.id !== selfThreadId)
         .map(async (entry) => ({
           id: entry.id,
-          phase: (await readState(bb, entry.id)).phase,
+          state: await readState(bb, entry.id),
+          busy: isBusyStatus(entry.status),
         })),
     );
   }
@@ -244,16 +252,12 @@ export default async function plugin(bb: BbPluginApi) {
       return;
     }
 
-    const entries = await bb.sdk.threads.list({
-      environmentId,
-      includeHidden: true,
-    });
-    // A busy sibling shares this working tree, so reviewing now would stage a
-    // moving target. Wait for a quiet checkout rather than dropping the turn;
-    // only once the wait has run out do we fall through to a review that keeps
-    // everything except the steps a contended tree makes unsafe.
-    const waitedOut = deferralExpired(state, Date.now());
-    if (hasActiveSibling(entries, thread.id) && !waitedOut) {
+    // Only another thread's review in flight parks this turn — two reviews
+    // staging, committing and merging in one working tree at once is the one
+    // thing to avoid. Threads that are merely running, including this thread's
+    // own advisor or subagents, never do.
+    const entries = await listEnvironment(environmentId);
+    if (hasReviewInFlight(await siblingReviews(entries, thread.id), Date.now())) {
       await deferTurn(thread, state, environmentId);
       return;
     }
@@ -279,12 +283,10 @@ export default async function plugin(bb: BbPluginApi) {
     });
 
     await withEnvLock(environmentId, async () => {
-      const recheck = await bb.sdk.threads.list({
-        environmentId,
-        includeHidden: true,
-      });
-      const contended = hasActiveSibling(recheck, thread.id);
-      if (contended && !waitedOut) {
+      const recheck = await listEnvironment(environmentId);
+      if (
+        hasReviewInFlight(await siblingReviews(recheck, thread.id), Date.now())
+      ) {
         await deferTurn(thread, state, environmentId, {
           commit: decision.commit,
           merge: decision.merge,
@@ -294,6 +296,7 @@ export default async function plugin(bb: BbPluginApi) {
         });
         return;
       }
+      const contended = hasBusyCodingSibling(recheck, thread.id);
 
       const prompt = buildReviewPrompt({
         decision,
@@ -357,9 +360,10 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   /**
-   * The checkout just went quiet, so let one deferred sibling through. One per
-   * sweep: the thread we release immediately occupies the environment again,
-   * and its own idle drives the next release.
+   * A thread in this checkout just went idle — possibly ending the review that
+   * parked its siblings — so let one deferred sibling through. One per call:
+   * the released thread latches its own review immediately, and that review's
+   * idle drives the next release.
    */
   async function releaseDeferred(self: GateThreadLike): Promise<void> {
     const environmentId = self.environmentId;
@@ -372,16 +376,9 @@ export default async function plugin(bb: BbPluginApi) {
     if (selfState.phase !== "idle") {
       return;
     }
-    const entries = await bb.sdk.threads.list({
-      environmentId,
-      includeHidden: true,
-    });
-    if (hasActiveSibling(entries, self.id)) {
-      return;
-    }
-
     const threadId = pickDeferredRelease(
-      await siblingPhases(environmentId, self.id),
+      await siblingReviews(await listEnvironment(environmentId), self.id),
+      Date.now(),
     );
     if (threadId === null) {
       return;
@@ -418,6 +415,170 @@ export default async function plugin(bb: BbPluginApi) {
     await evaluate(thread);
   }
 
+  /**
+   * Hold a plan's first presentation for review. The review turn is queued
+   * BEFORE the approval is denied: a thread awaiting an interaction cannot take
+   * a prompt, so the turn waits on the approval and core steers it in the
+   * moment the deny settles — the agent reads the reason alongside the deny
+   * instead of guessing why its plan was "rejected".
+   */
+  async function gatePlan(
+    thread: GateThreadLike,
+    approval: PlanApproval,
+  ): Promise<void> {
+    const state = await readState(bb, thread.id);
+    const project = await readProjectConfig(bb, thread.projectId);
+    const config = effectiveConfig(globals, project, state.skip === true);
+    if (!config.enabled || config.skipped) {
+      return;
+    }
+
+    const action = planGateAction(state, approval.plan);
+    if (action === "commit-plan") {
+      await recordFire(thread.projectId, thread.id, "stood-down", "commit-plan");
+      return;
+    }
+    if (action === "release") {
+      await writeState(bb, thread.id, {}, [...PLAN_GATE_KEYS]);
+      await recordFire(thread.projectId, thread.id, "stood-down", "plan-reviewed");
+      return;
+    }
+    if (action === "hold") {
+      await holdOrReleasePlan(thread, state, approval);
+      return;
+    }
+
+    await writeState(bb, thread.id, { planReviewArmedAt: Date.now() });
+    let queuedMessageId: string | null = null;
+    try {
+      const result = await bb.sdk.threads.send({
+        threadId: thread.id,
+        mode: "auto",
+        input: [
+          {
+            type: "text",
+            text: buildPlanReviewPrompt({
+              reviewMode: config.reviewMode,
+              planFilePath: approval.planFilePath,
+            }),
+            mentions: [],
+          },
+        ],
+      });
+      if (result.delivery === "queued") {
+        queuedMessageId = result.queuedMessage.id;
+        await writeState(bb, thread.id, { planReviewEntryId: queuedMessageId });
+      }
+    } catch (error) {
+      // Nothing was queued, so leave the plan with the user untouched.
+      bb.log.warn(
+        `auto-review: failed to queue the plan review for ${thread.id}; leaving the plan for the user: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      await writeState(bb, thread.id, {}, [...PLAN_GATE_KEYS]);
+      await recordFire(thread.projectId, thread.id, "stood-down", "send-failed");
+      return;
+    }
+    if (await denyPlan(thread, approval, queuedMessageId)) {
+      await recordFire(thread.projectId, thread.id, "fired", "plan-review");
+    }
+  }
+
+  /**
+   * A plan re-presented while its review is recorded as queued. Hold it only
+   * while the review really is still in the queue and has not been there past
+   * the stale window: the recorded id is cleared only by `message.dispatched`
+   * or `message.cancelled`, so trusting it alone would turn one missed event
+   * into a bare deny of every plan the thread presents from then on.
+   */
+  async function holdOrReleasePlan(
+    thread: GateThreadLike,
+    state: ThreadState,
+    approval: PlanApproval,
+  ): Promise<void> {
+    const entryId = state.planReviewEntryId ?? null;
+    const queued =
+      entryId !== null && (await queuedRowExists(thread.id, entryId));
+    const expired = planHoldExpired(state, Date.now());
+    if (queued && !expired) {
+      // The review is still queued behind this approval; denying lets it in.
+      await denyPlan(thread, approval, entryId);
+      return;
+    }
+    if (queued && entryId !== null) {
+      // Withdraw it, or it would land in the middle of implementing the plan
+      // this release hands to the user.
+      await withdrawQueuedReview(thread.id, entryId);
+    }
+    // Not queued any more means the review was dispatched and this is the
+    // reviewed plan, whose dispatch event never reached us.
+    await writeState(bb, thread.id, {}, [...PLAN_GATE_KEYS]);
+    await recordFire(
+      thread.projectId,
+      thread.id,
+      "stood-down",
+      queued ? "plan-hold-expired" : "plan-reviewed",
+    );
+  }
+
+  async function withdrawQueuedReview(
+    threadId: string,
+    queuedMessageId: string,
+  ): Promise<void> {
+    await bb.sdk.threads.queuedMessages
+      .delete({ threadId, queuedMessageId })
+      .catch((deleteError: unknown) => {
+        bb.log.warn(
+          `auto-review: could not withdraw the queued plan review ${queuedMessageId} in ${threadId}: ${
+            deleteError instanceof Error ? deleteError.message : String(deleteError)
+          }`,
+        );
+      });
+  }
+
+  /**
+   * Deny a held plan. If the deny fails the plan is still with the user (or
+   * they already answered it), so pull the queued review back out — otherwise
+   * it would land after an approval and send the agent back to planning in the
+   * middle of implementing — and disarm. A review that was delivered straight
+   * into the turn (no queued row) cannot be withdrawn; that is only logged.
+   */
+  async function denyPlan(
+    thread: GateThreadLike,
+    approval: PlanApproval,
+    queuedMessageId: string | null,
+  ): Promise<boolean> {
+    try {
+      await bb.sdk.threads.interactions.resolve({
+        threadId: thread.id,
+        interactionId: approval.interactionId,
+        resolution: { decision: "deny" },
+      });
+      return true;
+    } catch (error) {
+      bb.log.warn(
+        `auto-review: could not hold the plan for review in ${thread.id}; leaving it for the user: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      if (queuedMessageId !== null) {
+        await withdrawQueuedReview(thread.id, queuedMessageId);
+      }
+      await writeState(bb, thread.id, {}, [...PLAN_GATE_KEYS]);
+      await recordFire(thread.projectId, thread.id, "stood-down", "send-failed");
+      return false;
+    }
+  }
+
+  bb.events.on("interaction.pending", async ({ thread, interaction }) => {
+    const approval = planApprovalOf(interaction);
+    if (approval === null || !passesThreadGate(thread)) {
+      return;
+    }
+    await withThreadLock(thread.id, () => gatePlan(thread, approval));
+  });
+
   bb.events.on("thread.active", async ({ thread }) => {
     if (!passesThreadGate(thread)) {
       return;
@@ -448,6 +609,12 @@ export default async function plugin(bb: BbPluginApi) {
   bb.events.on("message.dispatched", async ({ entry }) => {
     await withThreadLock(entry.threadId, async () => {
       const state = await readState(bb, entry.threadId);
+      if (state.planReviewEntryId === entry.id) {
+        // The review is in the agent's hands; its next presentation is the
+        // reviewed plan.
+        await writeState(bb, entry.threadId, {}, ["planReviewEntryId"]);
+        return;
+      }
       if (
         state.phase === "pending-dispatch" &&
         state.pendingEntryId === entry.id
@@ -462,6 +629,11 @@ export default async function plugin(bb: BbPluginApi) {
   bb.events.on("message.cancelled", async ({ entry }) => {
     await withThreadLock(entry.threadId, async () => {
       const state = await readState(bb, entry.threadId);
+      if (state.planReviewEntryId === entry.id) {
+        // The review never ran, so the next plan still owes one.
+        await writeState(bb, entry.threadId, {}, [...PLAN_GATE_KEYS]);
+        return;
+      }
       if (
         state.phase === "pending-dispatch" &&
         state.pendingEntryId === entry.id
@@ -483,33 +655,30 @@ export default async function plugin(bb: BbPluginApi) {
     });
 
   /**
-   * The deadline behind `deferralExpired`. Releasing on a sibling's idle covers
-   * the common case, but a turn parked behind a sibling that never goes idle —
-   * or behind one whose idle this plugin never sees, because it is a child,
-   * plugin-origin or hidden thread — would otherwise sit parked forever with no
-   * event to wake it. This sweep is what makes the defer window an actual
-   * deadline rather than a condition checked only on re-entry.
+   * The backstop for a release no event delivered. The review that parked a
+   * turn normally releases it from its own idle, but that idle can be missed —
+   * a restart, or a blocker that failed, was deleted, or left a stale latch
+   * behind. Each pass retries every parked turn whose checkout no longer has a
+   * review in flight.
    */
-  async function sweepExpiredDeferrals(): Promise<void> {
+  async function sweepDeferrals(): Promise<void> {
     for (const entry of await readDeferrals(bb)) {
       const state = await readState(bb, entry.threadId);
       if (state.phase !== "deferred") {
         await removeDeferral(bb, entry.threadId);
         continue;
       }
-      if (!deferralExpired(state, Date.now())) {
-        continue;
-      }
       // Same veto `releaseDeferred` applies, and it is what keeps this loop to
       // one release per checkout: `evaluate` latches `awaiting-review` before
       // it sends, so a second entry in the same environment sees the first
-      // thread's review in flight and waits for the next pass. Without it, two
-      // entries expiring on the same tick would both read an idle-looking
-      // roster — a queued review does not flip its thread to `active` — and
-      // both would fire a stage-commit-merge sequence into one working tree.
+      // thread's review in flight and waits for the next pass.
       if (
         hasReviewInFlight(
-          await siblingPhases(entry.environmentId, entry.threadId),
+          await siblingReviews(
+            await listEnvironment(entry.environmentId),
+            entry.threadId,
+          ),
+          Date.now(),
         )
       ) {
         continue;
@@ -528,13 +697,17 @@ export default async function plugin(bb: BbPluginApi) {
     }
   }
 
-  bb.background.schedule("sweep-deferrals", "*/5 * * * *", sweepExpiredDeferrals);
+  bb.background.schedule("sweep-deferrals", "*/5 * * * *", sweepDeferrals);
 
+  // A failed or archived thread may have been the review a sibling was parked
+  // behind, and it will not go idle to release it.
   bb.events.on("thread.failed", async ({ thread }) => {
     await unlatch(thread.id);
+    await releaseDeferred(thread);
   });
   bb.events.on("thread.archived", async ({ thread }) => {
     await unlatch(thread.id);
+    await releaseDeferred(thread);
   });
   bb.events.on("thread.deleted", async ({ thread }) => {
     await unlatch(thread.id);

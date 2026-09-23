@@ -17,16 +17,6 @@ export const REVIEW_IN_FLIGHT_PHASES: readonly AutoReviewPhase[] = [
 
 export const STALE_WINDOW_MS = 30 * 60 * 1_000;
 
-/**
- * How long a turn may sit deferred behind a busy sibling before auto-review
- * gives up on a quiet tree and fires a contention-aware review instead.
- *
- * Independent of STALE_WINDOW_MS despite the matching value — that one bounds a
- * dispatch that may never have landed, this one bounds a wait for a quiet
- * checkout. Nothing relies on them being equal; change either alone.
- */
-export const DEFER_WINDOW_MS = 30 * 60 * 1_000;
-
 export const turnStartSchema = z.object({
   sinceSeq: z.number().int().nonnegative(),
 });
@@ -39,6 +29,15 @@ export const threadStateSchema = z.object({
   dispatchedAt: z.number().optional(),
   deferredSince: z.number().optional(),
   skip: z.literal(true).optional(),
+  /**
+   * Set when a plan's first presentation was held back for review; the next
+   * presentation (the reviewed plan) is released to the user and clears it.
+   * Deliberately not a latch key: an idle reset must not re-arm plan review
+   * in the middle of the review turn.
+   */
+  planReviewArmedAt: z.number().optional(),
+  /** The queued plan-review turn, until core dispatches it. */
+  planReviewEntryId: z.string().optional(),
 });
 export type ThreadState = z.infer<typeof threadStateSchema>;
 
@@ -106,6 +105,12 @@ export const LATCH_KEYS: readonly string[] = [
   "deferredSince",
 ];
 
+/** Plan-gate keys, cleared together whenever the gate disarms. */
+export const PLAN_GATE_KEYS: readonly string[] = [
+  "planReviewArmedAt",
+  "planReviewEntryId",
+];
+
 export function resetToIdlePatch(): {
   set: Partial<ThreadState>;
   remove: string[];
@@ -121,19 +126,18 @@ function elapsedBeyond(
   return since !== undefined && now - since > window;
 }
 
+/**
+ * True once a plan review has been armed for longer than the stale window. A
+ * review still queued that long is not going to be dispatched, and holding the
+ * thread's plans behind it any longer would only keep denying them.
+ */
+export function planHoldExpired(state: ThreadState, now: number): boolean {
+  return elapsedBeyond(state.planReviewArmedAt, now, STALE_WINDOW_MS);
+}
+
 export function isStale(state: ThreadState, now: number): boolean {
   return (
     state.phase !== "idle" &&
     elapsedBeyond(state.dispatchedAt, now, STALE_WINDOW_MS)
   );
-}
-
-/**
- * True once a deferred turn has waited out the defer window. Waiting is the
- * preferred answer to a contended checkout, but a sibling that never goes idle
- * must not strand the review forever — past this point auto-review fires a
- * contention-aware review rather than keeping the turn queued indefinitely.
- */
-export function deferralExpired(state: ThreadState, now: number): boolean {
-  return elapsedBeyond(state.deferredSince, now, DEFER_WINDOW_MS);
 }

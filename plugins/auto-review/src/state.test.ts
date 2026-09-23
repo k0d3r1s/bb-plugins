@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  DEFER_WINDOW_MS,
-  deferralExpired,
   isStale,
+  planHoldExpired,
   resetToIdlePatch,
   STALE_WINDOW_MS,
   threadStateSchema,
@@ -73,23 +72,19 @@ describe("resetToIdlePatch", () => {
   });
 });
 
-describe("deferralExpired", () => {
-  it("is false for a turn that was never deferred", () => {
-    expect(deferralExpired({ phase: "idle" }, Date.now())).toBe(false);
+describe("planHoldExpired", () => {
+  it("is false when no plan review is armed", () => {
+    expect(planHoldExpired({ phase: "idle" }, Date.now())).toBe(false);
   });
 
-  it("is false while the turn is still inside the defer window", () => {
-    const now = DEFER_WINDOW_MS * 10;
+  it("is false inside the window and true past it", () => {
+    const now = STALE_WINDOW_MS * 10;
     expect(
-      deferralExpired({ phase: "deferred", deferredSince: now - 1_000 }, now),
+      planHoldExpired({ phase: "idle", planReviewArmedAt: now - 1_000 }, now),
     ).toBe(false);
-  });
-
-  it("is true once the turn has waited out the window", () => {
-    const now = DEFER_WINDOW_MS * 10;
     expect(
-      deferralExpired(
-        { phase: "deferred", deferredSince: now - DEFER_WINDOW_MS - 1 },
+      planHoldExpired(
+        { phase: "idle", planReviewArmedAt: now - STALE_WINDOW_MS - 1 },
         now,
       ),
     ).toBe(true);

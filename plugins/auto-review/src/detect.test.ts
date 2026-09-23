@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  AUTHORSHIP_SEGMENT_LIMIT,
+  authoredPaths,
   authoredPathsFromRows,
   computeScope,
   dirtyOrAheadPaths,
@@ -147,5 +149,66 @@ describe("isBranchCheckout", () => {
     expect(isBranchCheckout(workspace({ checkout: { kind: "detached" } }))).toBe(
       false,
     );
+  });
+});
+
+describe("authoredPaths", () => {
+  function row(path: string, seq: number) {
+    return {
+      id: `row-${path}`,
+      kind: "work",
+      workKind: "file-change",
+      turnId: "t",
+      sourceSeqStart: seq,
+      sourceSeqEnd: seq,
+      change: { path, movePath: null },
+    };
+  }
+
+  function fakeBb(pages: Array<{ rows: unknown[]; olderEnd: number | null }>) {
+    const calls: Array<Record<string, unknown>> = [];
+    const bb = {
+      sdk: {
+        threads: {
+          timeline: async (args: Record<string, unknown>) => {
+            const index = calls.length;
+            calls.push(args);
+            const page = pages[index] ?? { rows: [], olderEnd: null };
+            const hasOlder = page.olderEnd !== null;
+            return {
+              rows: page.rows,
+              maxSeq: 999,
+              timelinePage: {
+                hasOlderRows: hasOlder,
+                olderCursor: hasOlder ? { anchorId: `a${index}`, anchorSeq: page.olderEnd } : null,
+                olderRowsSourceSeqEnd: page.olderEnd,
+              },
+            };
+          },
+        },
+      },
+    } as never;
+    return { bb, calls };
+  }
+
+  it("pages back until the page boundary reaches the turn start", async () => {
+    const { bb, calls } = fakeBb([
+      { rows: [row("late.ts", 300)], olderEnd: 250 },
+      { rows: [row("mid.ts", 200)], olderEnd: 90 },
+      { rows: [row("before-turn.ts", 50)], olderEnd: 10 },
+    ]);
+    const paths = await authoredPaths(bb, "thr", 100);
+    expect(paths.sort()).toEqual(["late.ts", "mid.ts"]);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toMatchObject({ beforeAnchorId: "a0", beforeAnchorSeq: "250" });
+    for (const call of calls) {
+      expect(Number(call.segmentLimit)).toBeLessThanOrEqual(AUTHORSHIP_SEGMENT_LIMIT);
+    }
+  });
+
+  it("stops after one page when there is no older history", async () => {
+    const { bb, calls } = fakeBb([{ rows: [row("a.ts", 150)], olderEnd: null }]);
+    expect(await authoredPaths(bb, "thr", 100)).toEqual(["a.ts"]);
+    expect(calls).toHaveLength(1);
   });
 });

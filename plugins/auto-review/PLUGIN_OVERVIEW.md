@@ -15,17 +15,21 @@ one provider-neutral implementation driven by bb's `thread.idle` event.
   branch merges into a personal mainline (e.g. `master`) whether the thread runs in a
   dedicated worktree or the primary checkout; a non-personal mainline (e.g. `main`) is
   never a merge target.
-- Defers rather than drops when a sibling thread is busy in the same (shared) working
-  tree: the turn-start cursor is kept and the full review fires once the checkout goes
-  quiet, one deferred thread released per idle. A turn that waits out the 30-minute defer
-  window fires a contention-aware review instead — review, scoped staging and the secret
-  scan intact, plan-continuation and merge replaced with an instruction to stop and report.
-  Parked turns are indexed in plugin storage and swept every 5 minutes, so a turn behind a
-  sibling that never goes idle is released on the deadline rather than waiting on an event.
+- Defers rather than drops only when another thread's review is queued or running in the
+  same (shared) working tree — never because other threads are merely active, and never
+  behind the thread itself. The turn-start cursor is kept and the full review fires when
+  the blocking review ends, one deferred thread released per idle (or failure/archive).
+  Parked turns are indexed in plugin storage and swept every 5 minutes, so a release whose
+  event was missed still happens. A review that fires while another user coding thread is
+  running is contention-aware: review, scoped staging, secret scan and commit intact,
+  plan-continuation and merge replaced with an instruction to stop and report.
 - Injects one review-and-commit turn into the same thread, guarded by a per-thread
   latch (persisted in plugin metadata) so it never reviews its own review turn. When that
   turn commits, it judges from the thread's plan whether work remains and continues any
   genuinely-unfinished planned work instead of halting mid-plan (never inventing work).
+- Reviews plans too: fires on `interaction.pending` for a plan approval, holds the
+  first presentation back (queues a review-plan turn, then denies the approval), and
+  releases the revised plan to the user on its re-presentation.
 - Ships enabled (opt-out). Turn it off globally or per project, or skip a single
   thread, with `bb auto-review`.
 

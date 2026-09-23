@@ -48,7 +48,10 @@ function* walkRows(
   }
 }
 
-export const AUTHORSHIP_SEGMENT_LIMIT = 1000;
+/** The timeline endpoint's own ceiling; asking for more is rejected with a 400. */
+export const AUTHORSHIP_SEGMENT_LIMIT = 100;
+/** Bounds the walk back through a very long turn: 50 pages of 100 segments. */
+export const AUTHORSHIP_MAX_PAGES = 50;
 
 export function authoredPathsFromRows(
   rows: readonly TimelineRow[],
@@ -70,17 +73,42 @@ export function authoredPathsFromRows(
   return [...paths];
 }
 
+/**
+ * Pages back from the latest segment until the page boundary falls at or before
+ * the turn-start cursor, so a long turn is not truncated to its last segments.
+ */
 export async function authoredPaths(
   bb: BbPluginApi,
   threadId: string,
   sinceSeq: number,
 ): Promise<string[]> {
-  const timeline = await bb.sdk.threads.timeline({
-    threadId,
-    segmentLimit: String(AUTHORSHIP_SEGMENT_LIMIT),
-    includeNestedRows: "true",
-  });
-  return authoredPathsFromRows(timeline.rows, sinceSeq);
+  const rows: TimelineRow[] = [];
+  let before: { anchorId: string; anchorSeq: number } | null = null;
+  for (let page = 0; page < AUTHORSHIP_MAX_PAGES; page += 1) {
+    const timeline: TimelineResult = await bb.sdk.threads.timeline({
+      threadId,
+      segmentLimit: String(AUTHORSHIP_SEGMENT_LIMIT),
+      includeNestedRows: "true",
+      ...(before === null
+        ? {}
+        : {
+            beforeAnchorId: before.anchorId,
+            beforeAnchorSeq: String(before.anchorSeq),
+          }),
+    });
+    rows.push(...timeline.rows);
+    const { hasOlderRows, olderCursor, olderRowsSourceSeqEnd } =
+      timeline.timelinePage;
+    const olderMayBeInTurn =
+      olderRowsSourceSeqEnd === undefined ||
+      olderRowsSourceSeqEnd === null ||
+      olderRowsSourceSeqEnd > sinceSeq;
+    if (!hasOlderRows || olderCursor === null || !olderMayBeInTurn) {
+      break;
+    }
+    before = olderCursor;
+  }
+  return authoredPathsFromRows(rows, sinceSeq);
 }
 
 export function dirtyOrAheadPaths(workspace: AvailableWorkspace): Set<string> {

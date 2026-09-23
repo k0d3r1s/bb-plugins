@@ -13,8 +13,8 @@ import {
 } from "./config.js";
 import { removeDeferral } from "./deferrals.js";
 import {
-  DEFER_WINDOW_MS,
   LATCH_KEYS,
+  PLAN_GATE_KEYS,
   readState,
   withThreadLock,
   writeState,
@@ -204,6 +204,7 @@ export function registerAutoReviewCli(
               await writeState(bb, threadId, { phase: "idle" }, [
                 ...LATCH_KEYS,
                 "skip",
+                ...PLAN_GATE_KEYS,
               ]);
               await removeDeferral(bb, threadId);
               return before;
@@ -230,7 +231,7 @@ export function registerAutoReviewCli(
                 exitCode: 0,
                 stdout:
                   `reset ${threadId} (dropped a deferred turn).\n` +
-                  "That turn was waiting for the shared checkout to go quiet, not stuck — its review and commit will now never run.\n",
+                  "That turn was waiting for another review in this checkout to finish, not stuck — its review and commit will now never run.\n",
               };
             }
             return {
@@ -290,9 +291,9 @@ export function registerAutoReviewCli(
         // rather than printing a bare word.
         const deferredText =
           state.phase === "deferred" && state.deferredSince !== undefined
-            ? `deferred for: ${Math.floor((Date.now() - state.deferredSince) / 60_000)} min ` +
-              `(of ${Math.floor(DEFER_WINDOW_MS / 60_000)}) — waiting for another thread to finish in this checkout.\n` +
-              "  It fires automatically once the checkout is quiet, or as a review that skips the merge after the window.\n" +
+            ? `deferred for: ${Math.floor((Date.now() - state.deferredSince) / 60_000)} min — ` +
+              "waiting for another thread's auto-review to finish in this checkout.\n" +
+              "  It fires automatically as soon as that review ends.\n" +
               `  To drop it instead: bb auto-review reset ${threadId}\n`
             : "";
         return {

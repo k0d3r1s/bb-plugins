@@ -6,7 +6,7 @@ import {
   type CreateFakePluginHostOptions,
 } from "@get-bb/plugin-sdk/testing";
 import plugin from "./server.js";
-import { DEFER_WINDOW_MS } from "./src/state.js";
+import { STALE_WINDOW_MS } from "./src/state.js";
 
 const THREAD_ID = "thread-1";
 const SIBLING_ID = "thread-2";
@@ -16,6 +16,8 @@ const PLUGIN_ID = "auto-review";
 interface EnvThread {
   id: string;
   status: string;
+  visibility?: string;
+  originPluginId?: string | null;
 }
 
 interface HostOptions {
@@ -24,11 +26,12 @@ interface HostOptions {
   authoredRows?: unknown[];
   workingTreeFiles?: Array<{ path: string }>;
   worktree?: boolean;
-  siblingActiveOnRecheck?: boolean;
+  siblingReviewOnRecheck?: boolean;
   queuedRows?: Array<{ id: string }>;
   envThreads?: EnvThread[];
   authoringThreads?: string[];
   getThrowsFor?: string[];
+  resolveThrows?: boolean;
 }
 
 function fileChangeRow(path: string, sourceSeqStart = 150): unknown {
@@ -56,6 +59,9 @@ function createHost(options: HostOptions = {}) {
   };
   const metadata = bucket(THREAD_ID);
   const sends: Array<{ threadId: string; mode: string; input: unknown }> = [];
+  const resolutions: Array<{ interactionId: string; resolution: unknown }> = [];
+  const deletedQueued: string[] = [];
+  const timelineLimits: Array<string | undefined> = [];
   let listCalls = 0;
   const authoredRows = options.authoredRows ?? [fileChangeRow("src/a.ts")];
   const workingTreeFiles = options.workingTreeFiles ?? [{ path: "src/a.ts" }];
@@ -65,6 +71,7 @@ function createHost(options: HostOptions = {}) {
     { id: THREAD_ID, status: "idle" },
   ];
   let maxSeq = 100;
+  let queuedRows = options.queuedRows ?? [];
 
   const sdk: CreateFakePluginHostOptions["sdk"] = {
     threads: {
@@ -96,18 +103,37 @@ function createHost(options: HostOptions = {}) {
       },
       // Only the authoring threads changed anything; a sibling that changed
       // nothing stands down on no-authorship rather than firing its own review.
-      timeline: async (args: { threadId: string }) => ({
-        rows: authoring.includes(args.threadId) ? authoredRows : [],
-        maxSeq,
-      }),
+      timeline: async (args: { threadId: string; segmentLimit?: string }) => {
+        timelineLimits.push(args.segmentLimit);
+        return {
+          rows: authoring.includes(args.threadId) ? authoredRows : [],
+          maxSeq,
+          timelinePage: {
+            hasOlderRows: false,
+            olderCursor: null,
+            olderRowsSourceSeqEnd: null,
+          },
+        };
+      },
       list: async () => {
         listCalls += 1;
-        const sibling =
-          options.siblingActiveOnRecheck === true && listCalls >= 2
-            ? [{ id: "sibling", status: "active", environmentIsWorktree: worktree }]
-            : [];
+        const siblingReviewing =
+          options.siblingReviewOnRecheck === true && listCalls >= 2;
+        if (siblingReviewing) {
+          Object.assign(bucket("sibling"), {
+            phase: "awaiting-review",
+            dispatchedAt: Date.now(),
+          });
+        }
+        const sibling = siblingReviewing
+          ? [{ id: "sibling", status: "idle", environmentIsWorktree: worktree }]
+          : [];
         return [
           ...envThreads.map((entry) => ({
+            parentThreadId: null,
+            originPluginId: null,
+            visibility: "visible",
+            environmentId: ENV_ID,
             ...entry,
             environmentIsWorktree: worktree,
           })),
@@ -123,7 +149,22 @@ function createHost(options: HostOptions = {}) {
           ? { ok: true, delivery: "queued", queuedMessage: { id: "qm-1" } }
           : { ok: true, delivery: "sent" };
       },
-      queuedMessages: { list: async () => options.queuedRows ?? [] },
+      queuedMessages: {
+        list: async () => queuedRows,
+        delete: async (args: { queuedMessageId: string }) => {
+          deletedQueued.push(args.queuedMessageId);
+          return {};
+        },
+      },
+      interactions: {
+        resolve: async (args: { interactionId: string; resolution: unknown }) => {
+          if (options.resolveThrows === true) {
+            throw new Error("interaction already settled");
+          }
+          resolutions.push(args);
+          return {};
+        },
+      },
     },
     environments: {
       status: async () => ({
@@ -147,11 +188,17 @@ function createHost(options: HostOptions = {}) {
     metadata,
     metadataFor: bucket,
     sends,
+    resolutions,
+    deletedQueued,
+    timelineLimits,
     setEnvThreads: (next: EnvThread[]) => {
       envThreads = next;
     },
     setMaxSeq: (next: number) => {
       maxSeq = next;
+    },
+    setQueuedRows: (next: Array<{ id: string }>) => {
+      queuedRows = next;
     },
   };
 }
@@ -178,6 +225,50 @@ function emitIdle(host: Host, id: string = THREAD_ID) {
 function promptText(host: Host, index = 0): string {
   const input = host.sends[index]?.input as Array<{ text: string }> | undefined;
   return input?.[0]?.text ?? "";
+}
+
+function planInteraction(
+  plan = "# Plan\n\nDo the thing.",
+  id = "pint-1",
+  planFilePath: string | null = "/home/u/.claude/plans/p.md",
+) {
+  return {
+    id,
+    threadId: THREAD_ID,
+    turnId: "turn-1",
+    status: "pending",
+    statusReason: null,
+    createdAt: 1,
+    resolvedAt: null,
+    resolution: null,
+    providerId: "claude-code",
+    providerRequestId: "req-1",
+    providerThreadId: "pt-1",
+    payload: {
+      kind: "approval",
+      availableDecisions: ["allow_once", "deny"],
+      reason: null,
+      subject: { kind: "plan", itemId: "item-1", plan, planFilePath },
+    },
+  };
+}
+
+function emitPlan(host: Host, interaction = planInteraction()) {
+  return host.harness.behavior.emitThreadEvent("interaction.pending", {
+    thread: thread(),
+    interaction,
+  } as never);
+}
+
+/** Latch a review onto `id`, as auto-review does just before it sends one. */
+function startReview(host: Host, id: string, dispatchedAt = Date.now()) {
+  Object.assign(host.metadataFor(id), { phase: "awaiting-review", dispatchedAt });
+}
+
+function endReview(host: Host, id: string) {
+  const state = host.metadataFor(id);
+  state.phase = "idle";
+  delete state.dispatchedAt;
 }
 
 function queueEntry() {
@@ -209,6 +300,19 @@ describe("auto-review plugin", () => {
     expect(secondIdle.errors).toEqual([]);
     expect(host.sends).toHaveLength(1);
     expect(host.metadata.phase).toBe("idle");
+    await host.harness.dispose();
+  });
+
+  it("never asks the timeline for more segments than it serves", async () => {
+    const host = createHost();
+    await plugin(host.bb);
+    await emitActive(host);
+    await emitIdle(host);
+    const limits = host.timelineLimits.filter((limit) => limit !== undefined);
+    expect(limits.length).toBeGreaterThan(0);
+    for (const limit of limits) {
+      expect(Number(limit)).toBeLessThanOrEqual(100);
+    }
     await host.harness.dispose();
   });
 
@@ -286,9 +390,65 @@ describe("auto-review plugin", () => {
     await host.harness.dispose();
   });
 
-  it("defers rather than dropping when a sibling becomes active before the firing lock", async () => {
-    const host = createHost({ siblingActiveOnRecheck: true });
+  it("fires the full review while only its own advisor is running", async () => {
+    const host = createHost({
+      envThreads: [
+        { id: THREAD_ID, status: "idle" },
+        {
+          id: "advisor",
+          status: "active",
+          visibility: "hidden",
+          originPluginId: "advisor",
+        },
+      ],
+    });
     await plugin(host.bb);
+    await emitActive(host);
+    await emitIdle(host);
+    expect(host.sends).toHaveLength(1);
+    expect(host.metadata.phase).toBe("awaiting-review");
+    expect(host.metadata.deferredSince).toBeUndefined();
+    const text = promptText(host);
+    expect(text).toMatch(/Merge the current branch/);
+    expect(text).not.toMatch(/another thread is running in this shared checkout/i);
+    await host.harness.dispose();
+  });
+
+  it("does not defer behind a running sibling, but drops continuation and merge", async () => {
+    const host = createHost({
+      envThreads: [
+        { id: THREAD_ID, status: "idle" },
+        { id: SIBLING_ID, status: "active" },
+      ],
+    });
+    await plugin(host.bb);
+    await emitActive(host);
+    await emitIdle(host);
+    expect(host.sends).toHaveLength(1);
+    expect(host.metadata.phase).toBe("awaiting-review");
+    const text = promptText(host);
+    expect(text).toMatch(/another thread is running in this shared checkout/i);
+    expect(text).toMatch(/Do NOT continue with further planned work/);
+    expect(text).not.toMatch(/Merge the current branch/);
+    expect(text).toMatch(/Commit the staged changes/);
+    const status = await host.harness.runCli(["status", THREAD_ID, "--json"]);
+    expect(JSON.parse(status.stdout).lastFire).toMatchObject({
+      outcome: "fired",
+      reason: "contended",
+      merge: false,
+    });
+    await host.harness.dispose();
+  });
+
+  it("defers rather than dropping when a sibling review is in flight", async () => {
+    const host = createHost({
+      envThreads: [
+        { id: THREAD_ID, status: "idle" },
+        { id: SIBLING_ID, status: "active" },
+      ],
+    });
+    await plugin(host.bb);
+    startReview(host, SIBLING_ID);
     await emitActive(host);
     await emitIdle(host);
     expect(host.sends).toHaveLength(0);
@@ -298,13 +458,8 @@ describe("auto-review plugin", () => {
     await host.harness.dispose();
   });
 
-  it("defers rather than dropping when a sibling is already active", async () => {
-    const host = createHost({
-      envThreads: [
-        { id: THREAD_ID, status: "idle" },
-        { id: SIBLING_ID, status: "active" },
-      ],
-    });
+  it("defers rather than dropping when a sibling review lands before the firing lock", async () => {
+    const host = createHost({ siblingReviewOnRecheck: true });
     await plugin(host.bb);
     await emitActive(host);
     await emitIdle(host);
@@ -322,6 +477,7 @@ describe("auto-review plugin", () => {
       ],
     });
     await plugin(host.bb);
+    startReview(host, SIBLING_ID);
     await emitActive(host);
     await emitIdle(host);
     expect(host.metadata.phase).toBe("deferred");
@@ -332,14 +488,16 @@ describe("auto-review plugin", () => {
     await host.harness.dispose();
   });
 
-  it("fires the deferred review once the checkout goes quiet", async () => {
+  it("fires the deferred review when the blocking review ends, even with other threads running", async () => {
     const host = createHost({
       envThreads: [
         { id: THREAD_ID, status: "idle" },
         { id: SIBLING_ID, status: "active" },
+        { id: "thread-3", status: "active" },
       ],
     });
     await plugin(host.bb);
+    startReview(host, SIBLING_ID);
     await emitActive(host);
     await emitIdle(host);
     expect(host.sends).toHaveLength(0);
@@ -348,16 +506,42 @@ describe("auto-review plugin", () => {
     host.setEnvThreads([
       { id: THREAD_ID, status: "idle" },
       { id: SIBLING_ID, status: "idle" },
+      { id: "thread-3", status: "active" },
     ]);
     const released = await emitIdle(host, SIBLING_ID);
     expect(released.errors).toEqual([]);
+    expect(host.metadataFor(SIBLING_ID).phase).toBe("idle");
     expect(host.sends).toHaveLength(1);
     expect(host.sends[0]?.threadId).toBe(THREAD_ID);
     expect(host.metadata.phase).toBe("awaiting-review");
     expect(host.metadata.deferredSince).toBeUndefined();
-    expect(promptText(host)).not.toMatch(
-      /another thread is running in this shared checkout/i,
-    );
+    await host.harness.dispose();
+  });
+
+  it("releases a deferred turn when the blocking thread fails mid-review", async () => {
+    const host = createHost({
+      envThreads: [
+        { id: THREAD_ID, status: "idle" },
+        { id: SIBLING_ID, status: "active" },
+      ],
+    });
+    await plugin(host.bb);
+    startReview(host, SIBLING_ID);
+    await emitActive(host);
+    await emitIdle(host);
+    expect(host.metadata.phase).toBe("deferred");
+
+    host.setEnvThreads([
+      { id: THREAD_ID, status: "idle" },
+      { id: SIBLING_ID, status: "error" },
+    ]);
+    const failed = await host.harness.behavior.emitThreadEvent("thread.failed", {
+      thread: thread(SIBLING_ID),
+    } as never);
+    expect(failed.errors).toEqual([]);
+    expect(host.metadataFor(SIBLING_ID).phase).toBe("idle");
+    expect(host.sends).toHaveLength(1);
+    expect(host.sends[0]?.threadId).toBe(THREAD_ID);
     await host.harness.dispose();
   });
 
@@ -372,7 +556,7 @@ describe("auto-review plugin", () => {
     host.metadataFor(THREAD_ID).phase = "deferred";
     host.metadataFor(THREAD_ID).deferredSince = Date.now();
     host.metadataFor(THREAD_ID).turnStart = { sinceSeq: 0 };
-    host.metadataFor(SIBLING_ID).phase = "awaiting-review";
+    startReview(host, SIBLING_ID);
 
     await emitIdle(host, "thread-3");
     expect(host.sends).toHaveLength(0);
@@ -405,28 +589,19 @@ describe("auto-review plugin", () => {
     await host.harness.dispose();
   });
 
-  it("fires a contention-aware review once the defer window runs out", async () => {
+  it("does not defer behind a stale review latch on a thread that went idle", async () => {
     const host = createHost({
       envThreads: [
         { id: THREAD_ID, status: "idle" },
-        { id: SIBLING_ID, status: "active" },
+        { id: SIBLING_ID, status: "idle" },
       ],
     });
     await plugin(host.bb);
-    host.metadata.phase = "deferred";
-    host.metadata.deferredSince = Date.now() - DEFER_WINDOW_MS - 1_000;
-    host.metadata.turnStart = { sinceSeq: 0 };
-
+    startReview(host, SIBLING_ID, Date.now() - STALE_WINDOW_MS - 1_000);
+    await emitActive(host);
     await emitIdle(host);
     expect(host.sends).toHaveLength(1);
     expect(host.metadata.phase).toBe("awaiting-review");
-    expect(host.metadata.deferredSince).toBeUndefined();
-
-    const text = promptText(host);
-    expect(text).toMatch(/another thread is running in this shared checkout/i);
-    expect(text).toMatch(/Do NOT continue with further planned work/);
-    expect(text).not.toMatch(/Merge the current branch/);
-    expect(text).toMatch(/Commit the staged changes/);
     await host.harness.dispose();
   });
 
@@ -456,7 +631,7 @@ describe("auto-review plugin", () => {
     await host.harness.dispose();
   });
 
-  it("sweeps an expired deferral onto a review with no thread event at all", async () => {
+  it("sweeps a parked turn whose blocking review ended without an event", async () => {
     const host = createHost({
       envThreads: [
         { id: THREAD_ID, status: "idle" },
@@ -464,24 +639,21 @@ describe("auto-review plugin", () => {
       ],
     });
     await plugin(host.bb);
+    startReview(host, SIBLING_ID);
     await emitActive(host);
     await emitIdle(host);
     expect(host.metadata.phase).toBe("deferred");
     expect(host.sends).toHaveLength(0);
 
-    // Nothing in this environment will ever go idle again; only the sweep can
-    // reach this turn.
     await host.harness.runSchedule("sweep-deferrals");
     expect(host.sends).toHaveLength(0);
 
-    host.metadata.deferredSince = Date.now() - DEFER_WINDOW_MS - 1_000;
+    // The sibling's review finished, but its idle never reached auto-review.
+    endReview(host, SIBLING_ID);
     await host.harness.runSchedule("sweep-deferrals");
     expect(host.sends).toHaveLength(1);
     expect(host.sends[0]?.threadId).toBe(THREAD_ID);
     expect(host.metadata.phase).toBe("awaiting-review");
-    expect(promptText(host)).toMatch(
-      /another thread is running in this shared checkout/i,
-    );
     await host.harness.dispose();
   });
 
@@ -493,11 +665,12 @@ describe("auto-review plugin", () => {
       ],
     });
     await plugin(host.bb);
+    startReview(host, SIBLING_ID);
     await emitActive(host);
     await emitIdle(host);
     expect(host.metadata.phase).toBe("deferred");
 
-    host.metadata.deferredSince = Date.now() - DEFER_WINDOW_MS - 1_000;
+    endReview(host, SIBLING_ID);
     // Both sweeps read the index and see the same parked thread before either
     // takes its lock; the loser must find the review already in flight.
     await Promise.all([
@@ -520,6 +693,7 @@ describe("auto-review plugin", () => {
       ],
     });
     await plugin(host.bb);
+    startReview(host, BLOCKER_ID);
 
     await emitActive(host);
     await emitIdle(host);
@@ -529,13 +703,8 @@ describe("auto-review plugin", () => {
     expect(host.metadataFor(SIBLING_ID).phase).toBe("deferred");
     expect(host.sends).toHaveLength(0);
 
-    const expired = Date.now() - DEFER_WINDOW_MS - 1_000;
-    host.metadataFor(THREAD_ID).deferredSince = expired;
-    host.metadataFor(SIBLING_ID).deferredSince = expired;
-
-    // Both are expired and the roster reads idle for both, but a queued review
-    // does not flip its thread to active — firing both would put two
-    // stage-commit-merge sequences in one working tree.
+    // Firing both would put two stage-commit-merge sequences in one tree.
+    endReview(host, BLOCKER_ID);
     await host.harness.runSchedule("sweep-deferrals");
     expect(host.sends).toHaveLength(1);
     await host.harness.dispose();
@@ -554,16 +723,16 @@ describe("auto-review plugin", () => {
     expect(host.sends).toHaveLength(1);
     host.sends.length = 0;
 
-    // Re-park this thread with an expired window, and put the sibling in flight.
+    // Re-park this thread, and put the sibling in flight.
     host.metadata.phase = "deferred";
-    host.metadata.deferredSince = Date.now() - DEFER_WINDOW_MS - 1_000;
+    host.metadata.deferredSince = Date.now();
     host.metadata.turnStart = { sinceSeq: 0 };
     await host.bb.storage.kv.set(`deferral:${THREAD_ID}`, {
       threadId: THREAD_ID,
       projectId: "project-1",
       environmentId: ENV_ID,
     });
-    host.metadataFor(SIBLING_ID).phase = "awaiting-review";
+    startReview(host, SIBLING_ID);
 
     await host.harness.runSchedule("sweep-deferrals");
     expect(host.sends).toHaveLength(0);
@@ -580,11 +749,12 @@ describe("auto-review plugin", () => {
       getThrowsFor: [THREAD_ID],
     });
     await plugin(host.bb);
+    startReview(host, SIBLING_ID);
     await emitActive(host);
     await emitIdle(host);
     expect(host.metadata.phase).toBe("deferred");
 
-    host.metadata.deferredSince = Date.now() - DEFER_WINDOW_MS - 1_000;
+    endReview(host, SIBLING_ID);
     await host.harness.runSchedule("sweep-deferrals");
 
     // Dropping the index entry alone would leave the thread latched in
@@ -604,14 +774,186 @@ describe("auto-review plugin", () => {
       ],
     });
     await plugin(host.bb);
+    startReview(host, SIBLING_ID);
     await emitActive(host);
     await emitIdle(host);
     expect(host.metadata.phase).toBe("deferred");
 
     await host.harness.runCli(["reset", THREAD_ID]);
-    host.metadata.deferredSince = Date.now() - DEFER_WINDOW_MS - 1_000;
+    endReview(host, SIBLING_ID);
     await host.harness.runSchedule("sweep-deferrals");
     expect(host.sends).toHaveLength(0);
+    expect(await host.bb.storage.kv.list("deferral:")).toEqual([]);
+    await host.harness.dispose();
+  });
+
+  it("holds a plan's first presentation for review: queues the review, then denies", async () => {
+    const host = createHost({ sendDelivery: "queued" });
+    await plugin(host.bb);
+    const { errors } = await emitPlan(host);
+    expect(errors).toEqual([]);
+    expect(host.sends).toHaveLength(1);
+    expect(host.sends[0]?.mode).toBe("auto");
+    const text = promptText(host);
+    expect(text).toMatch(/Nobody rejected it/);
+    expect(text).toContain("/home/u/.claude/plans/p.md");
+    expect(text).toContain('devkit_load_skill({ slug: "review-code" })');
+    expect(host.resolutions).toEqual([
+      { threadId: THREAD_ID, interactionId: "pint-1", resolution: { decision: "deny" } },
+    ]);
+    expect(typeof host.metadata.planReviewArmedAt).toBe("number");
+    await host.harness.dispose();
+  });
+
+  it("releases the reviewed plan to the user and re-arms for the next plan", async () => {
+    const host = createHost({ sendDelivery: "queued" });
+    await plugin(host.bb);
+    await emitPlan(host);
+    expect(host.metadata.planReviewEntryId).toBe("qm-1");
+    await host.harness.behavior.emitThreadEvent("message.dispatched", {
+      entry: queueEntry(),
+    });
+    expect(host.metadata.planReviewEntryId).toBeUndefined();
+    expect(host.metadata.phase ?? "idle").toBe("idle");
+    await emitPlan(host, planInteraction("# Plan v2", "pint-2"));
+    expect(host.sends).toHaveLength(1);
+    expect(host.resolutions).toHaveLength(1);
+    expect(host.metadata.planReviewArmedAt).toBeUndefined();
+
+    await emitPlan(host, planInteraction("# Another plan", "pint-3"));
+    expect(host.sends).toHaveLength(2);
+    expect(host.resolutions).toHaveLength(2);
+    await host.harness.dispose();
+  });
+
+  it("denies again, without a second review, a plan re-presented before the review dispatched", async () => {
+    const host = createHost({ sendDelivery: "queued", queuedRows: [{ id: "qm-1" }] });
+    await plugin(host.bb);
+    await emitPlan(host);
+    await emitPlan(host, planInteraction("# Plan, unreviewed", "pint-2"));
+    expect(host.sends).toHaveLength(1);
+    expect(host.resolutions.map((r) => r.interactionId)).toEqual(["pint-1", "pint-2"]);
+    expect(host.metadata.planReviewEntryId).toBe("qm-1");
+    expect(typeof host.metadata.planReviewArmedAt).toBe("number");
+    await host.harness.dispose();
+  });
+
+  it("releases the plan when its review left the queue without a dispatch event", async () => {
+    const host = createHost({ sendDelivery: "queued", queuedRows: [{ id: "qm-1" }] });
+    await plugin(host.bb);
+    await emitPlan(host);
+    expect(host.metadata.planReviewEntryId).toBe("qm-1");
+
+    // Core dispatched the review, but message.dispatched never reached us.
+    host.setQueuedRows([]);
+    await emitPlan(host, planInteraction("# Plan v2", "pint-2"));
+    expect(host.resolutions.map((r) => r.interactionId)).toEqual(["pint-1"]);
+    expect(host.metadata.planReviewArmedAt).toBeUndefined();
+    expect(host.metadata.planReviewEntryId).toBeUndefined();
+
+    // The gate is re-armed for the thread's next plan, not stuck denying.
+    await emitPlan(host, planInteraction("# Next plan", "pint-3"));
+    expect(host.sends).toHaveLength(2);
+    expect(host.resolutions.map((r) => r.interactionId)).toEqual(["pint-1", "pint-3"]);
+    await host.harness.dispose();
+  });
+
+  it("withdraws a review still queued past the stale window and releases the plan", async () => {
+    const host = createHost({ sendDelivery: "queued", queuedRows: [{ id: "qm-1" }] });
+    await plugin(host.bb);
+    await emitPlan(host);
+    host.metadata.planReviewArmedAt = Date.now() - STALE_WINDOW_MS - 1_000;
+
+    await emitPlan(host, planInteraction("# Plan v2", "pint-2"));
+    expect(host.resolutions.map((r) => r.interactionId)).toEqual(["pint-1"]);
+    expect(host.deletedQueued).toEqual(["qm-1"]);
+    expect(host.metadata.planReviewArmedAt).toBeUndefined();
+    expect(host.metadata.planReviewEntryId).toBeUndefined();
+    const status = await host.harness.runCli(["status", THREAD_ID, "--json"]);
+    expect(JSON.parse(status.stdout).lastFire).toMatchObject({
+      outcome: "stood-down",
+      reason: "plan-hold-expired",
+    });
+    await host.harness.dispose();
+  });
+
+  it("disarms when the queued plan review is cancelled", async () => {
+    const host = createHost({ sendDelivery: "queued" });
+    await plugin(host.bb);
+    await emitPlan(host);
+    await host.harness.behavior.emitThreadEvent("message.cancelled", {
+      entry: queueEntry(),
+    });
+    expect(host.metadata.planReviewArmedAt).toBeUndefined();
+    expect(host.metadata.planReviewEntryId).toBeUndefined();
+    await emitPlan(host, planInteraction("# Plan", "pint-2"));
+    expect(host.sends).toHaveLength(2);
+    await host.harness.dispose();
+  });
+
+  it("keeps the plan gate armed through a code-review idle reset", async () => {
+    const host = createHost({ sendDelivery: "queued" });
+    await plugin(host.bb);
+    await emitPlan(host);
+    await emitIdle(host);
+    expect(typeof host.metadata.planReviewArmedAt).toBe("number");
+    await host.harness.dispose();
+  });
+
+  it("passes a commit plan straight through", async () => {
+    const host = createHost({ sendDelivery: "queued" });
+    await plugin(host.bb);
+    await emitPlan(host, planInteraction("## Commit Plan\n<!-- devkit:commit-plan -->\n- a"));
+    expect(host.sends).toHaveLength(0);
+    expect(host.resolutions).toHaveLength(0);
+    expect(host.metadata.planReviewArmedAt).toBeUndefined();
+    await host.harness.dispose();
+  });
+
+  it("leaves the plan alone when auto-review is skipped for the thread", async () => {
+    const host = createHost({ sendDelivery: "queued" });
+    await plugin(host.bb);
+    await host.harness.runCli(["skip", THREAD_ID]);
+    await emitPlan(host);
+    expect(host.sends).toHaveLength(0);
+    expect(host.resolutions).toHaveLength(0);
+    await host.harness.dispose();
+  });
+
+  it("ignores approvals that are not plans", async () => {
+    const host = createHost({ sendDelivery: "queued" });
+    await plugin(host.bb);
+    const interaction = planInteraction();
+    await emitPlan(host, {
+      ...interaction,
+      payload: {
+        ...interaction.payload,
+        subject: { kind: "file_change", itemId: "i", writeScope: null, sessionGrant: null },
+      },
+    } as never);
+    expect(host.sends).toHaveLength(0);
+    expect(host.resolutions).toHaveLength(0);
+    await host.harness.dispose();
+  });
+
+  it("withdraws the queued review and disarms when the deny fails", async () => {
+    const host = createHost({ sendDelivery: "queued", resolveThrows: true });
+    await plugin(host.bb);
+    const { errors } = await emitPlan(host);
+    expect(errors).toEqual([]);
+    expect(host.deletedQueued).toEqual(["qm-1"]);
+    expect(host.metadata.planReviewArmedAt).toBeUndefined();
+    expect(host.metadata.planReviewEntryId).toBeUndefined();
+    await host.harness.dispose();
+  });
+
+  it("does not deny the plan when the review cannot be queued", async () => {
+    const host = createHost({ sendThrows: true });
+    await plugin(host.bb);
+    const { errors } = await emitPlan(host);
+    expect(errors).toEqual([]);
+    expect(host.resolutions).toHaveLength(0);
+    expect(host.metadata.planReviewArmedAt).toBeUndefined();
     await host.harness.dispose();
   });
 

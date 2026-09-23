@@ -18,6 +18,28 @@ case it does not auto-continue.
 
 It ships **enabled** (opt-out).
 
+## Plan review
+
+A plan gets reviewed before the user sees it. When an agent presents a plan for approval
+(Claude Code's ExitPlanMode, Codex's plan action), auto-review holds back the **first**
+presentation. It queues a review turn and then denies that approval, so the
+agent gets the reason along with the deny rather than reading it as a rejection. The agent
+reviews the plan file (devkit's calibrated review in `plan` scope, or a self-review, per the
+review mode), applies every valid finding to the plan, and presents it again. That second
+presentation goes straight to the user and resets the gate for the thread's next plan. A
+re-presentation that arrives before the review turn has been delivered is denied again,
+so the user never gets an unreviewed plan — but only while that review is actually still in
+the queue. If it has already left the queue (its dispatch event was missed), the
+re-presentation is the reviewed plan and goes to the user. If it is still queued after 30
+minutes, auto-review withdraws it and releases the plan (reason `plan-hold-expired`), so a
+stuck review can never turn into a permanent deny. Once
+the plan is approved and implemented, the normal post-turn code review runs on turn end.
+
+A plan carrying the `<!-- devkit:commit-plan -->` sentinel on a line of its own (devkit's
+commit workflow) is bookkeeping, not code, and passes through unreviewed. `skip` and
+`disable` turn plan review off along with code review; `reset` also clears a gate left
+armed by a review that never re-presented its plan.
+
 ## CLI
 
 All commands accept `--json`.
@@ -44,8 +66,9 @@ All commands accept `--json`.
 - **Merge-eligible mainlines** — comma-separated branch names treated as personal
   mainlines a feature branch may be merged into locally, in a worktree or the primary
   checkout (default `master`).
-- **Review mode** — `auto` (review-code workflow if present, else self-review), `devkit`
-  (require the devkit review-code workflow), or `self` (always self-review).
+- **Review mode** — `auto` (devkit's calibrated review via `devkit_load_skill` when that
+  tool is available, else self-review), `devkit` (require devkit's review), or `self`
+  (always self-review). Applies to both plan and code review.
 
 Per-project overrides and per-thread skip are stored by the plugin, not in settings.
 
@@ -62,28 +85,31 @@ A feature branch merges into an eligible mainline (e.g. `master`) whether it run
 
 ## Shared checkouts
 
-Threads sharing an environment share one working tree, so a review that staged and
-committed while another thread was mid-edit could capture a half-written file or commit
-work that isn't its own. When a turn ends and a sibling is still running, auto-review
-**defers** that turn rather than skipping it: the turn-start cursor is kept, and the review
-fires — in full — as soon as the checkout goes quiet. If the thread takes another turn
-while deferred, the earlier cursor is carried forward, so one review covers both turns.
+Threads sharing an environment share one working tree. Other threads running there — a
+sibling coding thread, this thread's own advisor, subagents — never hold a review back:
+every review stages only the files its own turn authored (explicit pathspec) and skips any
+file carrying edits it did not make.
 
-Deferred turns are released one at a time, as each sibling goes idle; the released thread
-then holds the checkout itself.
+If another user coding thread (top-level, visible, not plugin-created) is running when the
+review fires, that review is **contention-aware**: review, fixes, scoped staging, the secret
+scan and the commit all run as normal, and only the two steps that need the tree to
+themselves — continuing the plan, and the local merge, which switches branches under the
+other thread — are replaced with an instruction to stop and report what remains. An advisor
+or subagent running for the thread does not trigger this.
 
-If a sibling never goes idle — a long-running turn, or a thread whose idle auto-review never
-sees because it is a child, plugin-origin or hidden thread — the turn is still not stranded.
-A background sweep runs every 5 minutes and picks up any deferral older than 30 minutes, so
-the review fires without needing another thread event. Because the sweep is on a fixed
-5-minute clock rather than anchored to each deferral, the real worst case is ~35 minutes,
-not exactly 30. The sweep releases at most one turn per checkout per pass, for the same
-reason idle-release does. That review is **contention-aware**:
-review, fixes, scoped staging and the secret scan all run as normal, and only the two steps
-that need an uncontested tree — continuing the plan, and the local merge — are replaced with
-an instruction to stop and report what remains. It still commits; the scoped pathspec and the
-"skip any file carrying edits you did not make" rule are what keep that safe, and they are
-deliberate, not an oversight.
+What auto-review does not allow is two **reviews** in one checkout at once — two
+stage-commit-merge sequences racing the same tree. When a turn ends while another thread's
+auto-review is queued or running in the same checkout, auto-review **defers** that turn
+rather than skipping it: the turn-start cursor is kept, and the review fires — in full — as
+soon as the blocking review ends. If the thread takes another turn while deferred, the
+earlier cursor is carried forward, so one review covers both turns. A thread is never
+deferred behind itself.
+
+Deferred turns are released one at a time: when the blocking review's thread goes idle (or
+fails, or is archived), one parked turn starts its review, and that review's idle releases
+the next. If that event is missed, a background sweep every 5 minutes retries any parked turn
+whose checkout no longer has a review in flight. A review latch older than 30 minutes on a
+thread that is no longer running counts as a lost idle, not a review, so it never blocks.
 
 `bb auto-review status` shows a parked turn as phase `deferred`, with how long it has waited
 and what will release it. `bb auto-review reset <thread-id>` drops the turn instead — its
@@ -92,13 +118,12 @@ review and commit then never run.
 ## `reason` values in `status`
 
 - `fired` — a review was injected.
-- `contended` — a review was injected while another thread was still running in the same
-  checkout, after the turn had waited out the defer window. Review, scoped staging and the
-  secret scan still ran; continuing the plan and merging were dropped (see *Shared
-  checkouts*).
-- `sibling-active` — another thread is running in the same checkout. Paired with outcome
-  `deferred`, this turn is parked and will be reviewed when the checkout goes quiet. Not a
-  skip — nothing is lost.
+- `contended` — a review was injected while another user coding thread was running in the
+  same checkout. Review, scoped staging, the secret scan and the commit still ran;
+  continuing the plan and merging were dropped (see *Shared checkouts*).
+- `sibling-active` — another thread's auto-review is running in the same checkout. Paired
+  with outcome `deferred`, this turn is parked and will be reviewed as soon as that review
+  ends. Not a skip — nothing is lost.
 - `no-authorship` — the agent changed no files this turn.
 - `empty-scope` — the files it changed are no longer uncommitted or ahead (e.g. reverted).
 - `no-turn-start` — no turn-start cursor was recorded (a missed start event); stood down, fail-safe.
