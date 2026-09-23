@@ -27,6 +27,9 @@ interface ParsedArgs {
   flags: Map<string, string | true>;
 }
 
+/** Flags that never take a value, so they must not swallow a following positional. */
+const BOOLEAN_FLAGS: ReadonlySet<string> = new Set(["json", "global"]);
+
 function parseArgs(argv: string[]): ParsedArgs {
   const positionals: string[] = [];
   const flags = new Map<string, string | true>();
@@ -43,7 +46,11 @@ function parseArgs(argv: string[]): ParsedArgs {
       continue;
     }
     const nextToken = argv[index + 1];
-    if (nextToken !== undefined && !nextToken.startsWith("--")) {
+    if (
+      !BOOLEAN_FLAGS.has(body) &&
+      nextToken !== undefined &&
+      !nextToken.startsWith("--")
+    ) {
       flags.set(body, nextToken);
       index += 1;
     } else {

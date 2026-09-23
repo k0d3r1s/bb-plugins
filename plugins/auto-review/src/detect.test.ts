@@ -3,14 +3,17 @@ import {
   AUTHORSHIP_SEGMENT_LIMIT,
   authoredPaths,
   authoredPathsFromRows,
+  captureTree,
   computeScope,
   dirtyOrAheadPaths,
+  fetchWorkspace,
   fingerprintsMatch,
   isBranchCheckout,
   mainlineBase,
   siblingAuthoredPaths,
   snapshotTree,
   treeChangedPaths,
+  turnChangedPaths,
   type AvailableWorkspace,
 } from "./detect.js";
 
@@ -382,5 +385,453 @@ describe("treeChangedPaths and siblingAuthoredPaths", () => {
     const foreign = await siblingAuthoredPaths(bb, entries, "self", startedAt);
     expect([...foreign]).toEqual(["sib.ts"]);
     expect(timelineCalls).toEqual(["sib"]);
+  });
+});
+
+describe("workspace capture edge cases", () => {
+  interface Env {
+    status?: () => Promise<unknown>;
+    diffFile?: (args: { path: string }) => Promise<unknown>;
+    diffFiles?: (args: { sha: string }) => Promise<unknown>;
+    timeline?: (args: Record<string, unknown>) => Promise<unknown>;
+  }
+
+  function fakeBb(env: Env) {
+    const warnings: string[] = [];
+    const diffFileCalls: string[] = [];
+    const diffFilesCalls: string[] = [];
+    const timelineCalls: Array<Record<string, unknown>> = [];
+    const bb = {
+      log: {
+        warn: (message: string) => {
+          warnings.push(message);
+        },
+      },
+      sdk: {
+        environments: {
+          status: env.status ?? (async () => ({ outcome: "unavailable" })),
+          diffFile: async (args: { path: string }) => {
+            diffFileCalls.push(args.path);
+            if (env.diffFile === undefined) {
+              return { content: `content of ${args.path}` };
+            }
+            return env.diffFile(args);
+          },
+          diffFiles: async (args: { sha: string }) => {
+            diffFilesCalls.push(args.sha);
+            if (env.diffFiles === undefined) {
+              return { outcome: "available", files: [] };
+            }
+            return env.diffFiles(args);
+          },
+        },
+        threads: {
+          timeline: async (args: Record<string, unknown>) => {
+            timelineCalls.push(args);
+            if (env.timeline === undefined) {
+              return {
+                rows: [],
+                maxSeq: 0,
+                timelinePage: { hasOlderRows: false, olderCursor: null },
+              };
+            }
+            return env.timeline(args);
+          },
+        },
+      },
+    } as never;
+    return { bb, warnings, diffFileCalls, diffFilesCalls, timelineCalls };
+  }
+
+  function ws(over: Record<string, unknown> = {}): AvailableWorkspace {
+    return {
+      workingTree: { files: [] },
+      branch: { currentBranch: "b", defaultBranch: "master" },
+      checkout: { kind: "branch", branchName: "b", headSha: "h0" },
+      mergeBase: { files: [], commits: [] },
+      ...over,
+    } as unknown as AvailableWorkspace;
+  }
+
+  function tracked(path: string, status = "M", insertions = 1) {
+    return { path, status, insertions, deletions: 0 };
+  }
+
+  describe("fetchWorkspace", () => {
+    it("returns the workspace only when the status is available", async () => {
+      const workspace = ws();
+      const available = fakeBb({
+        status: async () => ({ outcome: "available", workspace }),
+      });
+      expect(await fetchWorkspace(available.bb, "env")).toBe(workspace);
+      const missing = fakeBb({ status: async () => ({ outcome: "not-found" }) });
+      expect(await fetchWorkspace(missing.bb, "env")).toBeNull();
+    });
+  });
+
+  describe("captureTree", () => {
+    it("is undefined when the workspace is unavailable, without warning", async () => {
+      const { bb, warnings } = fakeBb({});
+      expect(await captureTree(bb, "env")).toBeUndefined();
+      expect(warnings).toEqual([]);
+    });
+
+    it("snapshots an available workspace", async () => {
+      const { bb } = fakeBb({
+        status: async () => ({
+          outcome: "available",
+          workspace: ws({ workingTree: { files: [tracked("a.ts")] } }),
+        }),
+      });
+      const tree = await captureTree(bb, "env");
+      expect(tree?.headSha).toBe("h0");
+      expect(Object.keys(tree?.files ?? {})).toEqual(["a.ts"]);
+    });
+
+    it("never throws: a failing status read is logged and left to the timeline", async () => {
+      const failing = fakeBb({
+        status: async () => {
+          throw new Error("daemon down");
+        },
+      });
+      expect(await captureTree(failing.bb, "env-7")).toBeUndefined();
+      expect(failing.warnings).toHaveLength(1);
+      expect(failing.warnings[0]).toContain("could not snapshot the working tree of env-7");
+      expect(failing.warnings[0]).toContain("daemon down");
+
+      const oddThrow = fakeBb({
+        status: async () => {
+          throw "plain string";
+        },
+      });
+      expect(await captureTree(oddThrow.bb, "env")).toBeUndefined();
+      expect(oddThrow.warnings[0]).toContain("plain string");
+    });
+  });
+
+  describe("snapshotTree", () => {
+    it("does not read a deleted file's content", async () => {
+      const { bb, diffFileCalls } = fakeBb({});
+      const snapshot = await snapshotTree(
+        bb,
+        "env",
+        ws({ workingTree: { files: [tracked("gone.ts", "D"), tracked("kept.ts")] } }),
+      );
+      expect(diffFileCalls).toEqual(["kept.ts"]);
+      expect(snapshot.files["gone.ts"]).toBe("D:1:0|");
+      expect(snapshot.files["kept.ts"]).toMatch(/^M:1:0\|[0-9a-f]{16}$/u);
+    });
+
+    it("stores an empty hash for a file whose content cannot be read", async () => {
+      const { bb } = fakeBb({
+        diffFile: async () => {
+          throw new Error("binary too large");
+        },
+      });
+      const snapshot = await snapshotTree(
+        bb,
+        "env",
+        ws({ workingTree: { files: [tracked("big.bin")] } }),
+      );
+      expect(snapshot.files["big.bin"]).toBe("M:1:0|");
+    });
+
+    it("records a detached head, and no head at all for other checkouts", async () => {
+      const { bb } = fakeBb({});
+      const detached = await snapshotTree(
+        bb,
+        "env",
+        ws({ checkout: { kind: "detached", headSha: "d1" } }),
+      );
+      expect(detached.headSha).toBe("d1");
+      const unborn = await snapshotTree(bb, "env", ws({ checkout: { kind: "unborn" } }));
+      expect(unborn.headSha).toBeNull();
+    });
+
+    it("records the commits already ahead, and none without a merge base", async () => {
+      const { bb } = fakeBb({});
+      const ahead = await snapshotTree(
+        bb,
+        "env",
+        ws({ mergeBase: { files: [], commits: [{ sha: "c1" }, { sha: "c2" }] } }),
+      );
+      expect(ahead.commits).toEqual(["c1", "c2"]);
+      const snapshot = await snapshotTree(bb, "env", ws({ mergeBase: null }));
+      expect(snapshot.commits).toEqual([]);
+    });
+  });
+
+  describe("treeChangedPaths", () => {
+    it("claims a file whose line stats changed without re-reading its content", async () => {
+      const { bb, diffFileCalls } = fakeBb({});
+      const before = {
+        headSha: "h0",
+        files: { "a.ts": "M:1:0|abcdef0123456789" },
+        commits: [],
+      };
+      const changed = await treeChangedPaths(
+        bb,
+        "env",
+        before,
+        ws({ workingTree: { files: [tracked("a.ts", "M", 5)] } }),
+      );
+      expect(changed).toEqual(["a.ts"]);
+      expect(diffFileCalls).toEqual([]);
+    });
+
+    it("does not re-read a file that was unhashed at turn start and kept its stats", async () => {
+      const { bb, diffFileCalls } = fakeBb({});
+      const before = { headSha: "h0", files: { "a.ts": "M:1:0|" }, commits: [] };
+      const changed = await treeChangedPaths(
+        bb,
+        "env",
+        before,
+        ws({ workingTree: { files: [tracked("a.ts")] } }),
+      );
+      expect(changed).toEqual([]);
+      expect(diffFileCalls).toEqual([]);
+    });
+
+    it("reports both sides of a rename committed during the turn", async () => {
+      const { bb } = fakeBb({
+        diffFiles: async () => ({
+          outcome: "available",
+          files: [{ path: "new.ts", previousPath: "old.ts" }],
+        }),
+      });
+      const before = { headSha: "h0", files: {}, commits: [] };
+      const changed = await treeChangedPaths(
+        bb,
+        "env",
+        before,
+        ws({
+          checkout: { kind: "branch", headSha: "c1" },
+          mergeBase: { files: [], commits: [{ sha: "c1" }] },
+        }),
+      );
+      expect(changed.sort()).toEqual(["new.ts", "old.ts"]);
+    });
+
+    it("skips a commit it cannot read and still counts the others", async () => {
+      const { bb, diffFilesCalls } = fakeBb({
+        diffFiles: async ({ sha }) => {
+          if (sha === "bad") {
+            throw new Error("object missing");
+          }
+          if (sha === "gone") {
+            return { outcome: "not-found" };
+          }
+          return { outcome: "available", files: [{ path: `${sha}.ts`, previousPath: null }] };
+        },
+      });
+      const before = { headSha: "h0", files: {}, commits: ["old"] };
+      const changed = await treeChangedPaths(
+        bb,
+        "env",
+        before,
+        ws({
+          checkout: { kind: "branch", headSha: "good" },
+          mergeBase: {
+            files: [],
+            commits: [{ sha: "good" }, { sha: "bad" }, { sha: "gone" }, { sha: "old" }],
+          },
+        }),
+      );
+      expect(changed).toEqual(["good.ts"]);
+      // A commit already ahead at turn start is not the turn's work.
+      expect(diffFilesCalls.sort()).toEqual(["bad", "gone", "good"]);
+    });
+
+    it("reads no commits when the head did not move", async () => {
+      const { bb, diffFilesCalls } = fakeBb({});
+      const before = { headSha: "h0", files: {}, commits: [] };
+      await treeChangedPaths(
+        bb,
+        "env",
+        before,
+        ws({ mergeBase: { files: [], commits: [{ sha: "c1" }] } }),
+      );
+      expect(diffFilesCalls).toEqual([]);
+    });
+
+    it("tolerates a moved head with no merge base", async () => {
+      const { bb, diffFilesCalls } = fakeBb({});
+      const before = { headSha: "h0", files: {}, commits: [] };
+      const changed = await treeChangedPaths(
+        bb,
+        "env",
+        before,
+        ws({ checkout: { kind: "branch", headSha: "h1" }, mergeBase: null }),
+      );
+      expect(changed).toEqual([]);
+      expect(diffFilesCalls).toEqual([]);
+    });
+  });
+
+  describe("siblingAuthoredPaths", () => {
+    const startedAt = 1_000;
+    const entry = (id: string, extra: Record<string, unknown> = {}) => ({
+      id,
+      parentThreadId: null,
+      lifecycleOwnerThreadId: null,
+      deletedAt: null,
+      status: "active",
+      updatedAt: 3_000,
+      ...extra,
+    });
+    const change = (path: string, createdAt: number, movePath: string | null = null) => ({
+      kind: "work",
+      workKind: "file-change",
+      createdAt,
+      change: { path, movePath },
+    });
+
+    it("counts both sides of a sibling's move", async () => {
+      const { bb } = fakeBb({
+        timeline: async () => ({
+          rows: [change("from.ts", 2_000, "to.ts")],
+          maxSeq: 0,
+          timelinePage: { hasOlderRows: false, olderCursor: null },
+        }),
+      });
+      const paths = await siblingAuthoredPaths(
+        bb,
+        [entry("self"), entry("sib")] as never,
+        "self",
+        startedAt,
+      );
+      expect([...paths].sort()).toEqual(["from.ts", "to.ts"]);
+    });
+
+    it("pages back only while the oldest row on the page is inside the turn", async () => {
+      const pages = [
+        { rows: [change("p0.ts", 2_000)], cursor: { anchorId: "a0", anchorSeq: 50 } },
+        { rows: [{ kind: "turn" }, change("p1.ts", 1_500)], cursor: { anchorId: "a1", anchorSeq: 40 } },
+        { rows: [change("p2.ts", 900), change("p2b.ts", 1_200)], cursor: { anchorId: "a2", anchorSeq: 30 } },
+        { rows: [change("never.ts", 1_100)], cursor: null },
+      ];
+      const { bb, timelineCalls } = fakeBb({
+        timeline: async () => {
+          const page = pages[timelineCalls.length - 1] ?? pages[3];
+          return {
+            rows: page?.rows ?? [],
+            maxSeq: 0,
+            timelinePage: {
+              hasOlderRows: page?.cursor !== null,
+              olderCursor: page?.cursor ?? null,
+            },
+          };
+        },
+      });
+      const paths = await siblingAuthoredPaths(
+        bb,
+        [entry("self"), entry("sib")] as never,
+        "self",
+        startedAt,
+      );
+      // Page 2 reaches before the turn, so paging stops there; its in-turn row still counts.
+      expect(timelineCalls).toHaveLength(3);
+      expect(timelineCalls[1]).toMatchObject({ beforeAnchorId: "a0", beforeAnchorSeq: "50" });
+      expect([...paths].sort()).toEqual(["p0.ts", "p1.ts", "p2b.ts"]);
+    });
+
+    it("keeps paging through pages that carry no timestamps", async () => {
+      const { bb, timelineCalls } = fakeBb({
+        timeline: async () => {
+          const first = timelineCalls.length === 1;
+          return {
+            rows: first ? [{ kind: "turn" }] : [change("later.ts", 2_000)],
+            maxSeq: 0,
+            timelinePage: {
+              hasOlderRows: first,
+              olderCursor: first ? { anchorId: "a0", anchorSeq: 5 } : null,
+            },
+          };
+        },
+      });
+      const paths = await siblingAuthoredPaths(
+        bb,
+        [entry("self"), entry("sib")] as never,
+        "self",
+        startedAt,
+      );
+      expect(timelineCalls).toHaveLength(2);
+      expect([...paths]).toEqual(["later.ts"]);
+    });
+
+    it("never reads a deleted sibling", async () => {
+      const { bb, timelineCalls } = fakeBb({});
+      await siblingAuthoredPaths(
+        bb,
+        [entry("self"), entry("dead", { deletedAt: 2_000 })] as never,
+        "self",
+        startedAt,
+      );
+      expect(timelineCalls).toEqual([]);
+    });
+  });
+
+  describe("turnChangedPaths", () => {
+    const ownRows = (paths: string[]) => ({
+      rows: paths.map((path, i) => ({
+        kind: "work",
+        workKind: "file-change",
+        sourceSeqStart: 10 + i,
+        createdAt: 2_000,
+        change: { path, movePath: null },
+      })),
+      maxSeq: 0,
+      timelinePage: { hasOlderRows: false, olderCursor: null },
+    });
+
+    it("uses the timeline alone when the turn-start tree is missing", async () => {
+      const { bb, diffFileCalls } = fakeBb({ timeline: async () => ownRows(["own.ts"]) });
+      const paths = await turnChangedPaths(bb, {
+        threadId: "self",
+        environmentId: "env",
+        turnStart: { sinceSeq: 0 },
+        workspace: ws({ workingTree: { files: [tracked("shell.ts")] } }),
+        threadEntries: [],
+      });
+      expect(paths).toEqual(["own.ts"]);
+      expect(diffFileCalls).toEqual([]);
+    });
+
+    it("does not read siblings when the tree shows nothing beyond the thread's own edits", async () => {
+      const { bb, timelineCalls } = fakeBb({ timeline: async () => ownRows(["own.ts"]) });
+      const paths = await turnChangedPaths(bb, {
+        threadId: "self",
+        environmentId: "env",
+        turnStart: { sinceSeq: 0, startedAt: 1_000, tree: { headSha: "h0", files: {}, commits: [] } },
+        workspace: ws({
+          workingTree: {
+            files: [
+              tracked("own.ts"),
+              { path: ".codex/log.txt", status: "??", insertions: null, deletions: null },
+            ],
+          },
+        }),
+        threadEntries: [
+          { id: "sib", parentThreadId: null, lifecycleOwnerThreadId: null, deletedAt: null, status: "active", updatedAt: 3_000 },
+        ] as never,
+      });
+      expect(paths).toEqual(["own.ts"]);
+      expect(timelineCalls.map((call) => call.threadId)).toEqual(["self"]);
+    });
+
+    it("claims unattributed tree changes outright when the turn start time is unknown", async () => {
+      const { bb, timelineCalls } = fakeBb({ timeline: async () => ownRows([]) });
+      const paths = await turnChangedPaths(bb, {
+        threadId: "self",
+        environmentId: "env",
+        turnStart: { sinceSeq: 0, tree: { headSha: "h0", files: {}, commits: [] } },
+        workspace: ws({ workingTree: { files: [tracked("shell.ts")] } }),
+        threadEntries: [
+          { id: "sib", parentThreadId: null, lifecycleOwnerThreadId: null, deletedAt: null, status: "active", updatedAt: 3_000 },
+        ] as never,
+      });
+      expect(paths).toEqual(["shell.ts"]);
+      expect(timelineCalls.map((call) => call.threadId)).toEqual(["self"]);
+    });
   });
 });

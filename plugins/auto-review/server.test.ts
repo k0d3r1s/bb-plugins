@@ -38,6 +38,13 @@ interface HostOptions {
   authoringThreads?: string[];
   getThrowsFor?: string[];
   resolveThrows?: boolean;
+  /** Withdrawing a queued message fails, as when core already dispatched it. */
+  deleteQueuedThrows?: boolean;
+  /** The environment status read reports the workspace unavailable. */
+  statusUnavailable?: boolean;
+  checkoutKind?: string;
+  /** Threads that `get` reports hidden, so they no longer pass the thread gate. */
+  hiddenThreads?: string[];
 }
 
 interface TreeFile {
@@ -127,6 +134,9 @@ function createHost(options: HostOptions = {}) {
             id: args.threadId,
             environmentId: ENV_ID,
             providerId: providerOf(args.threadId),
+            ...(options.hiddenThreads?.includes(args.threadId) === true
+              ? { visibility: "hidden" as const }
+              : {}),
           }),
           status: listed?.status ?? "idle",
           projectId: "project-1",
@@ -179,6 +189,9 @@ function createHost(options: HostOptions = {}) {
       queuedMessages: {
         list: async () => queuedRows,
         delete: async (args: { queuedMessageId: string }) => {
+          if (options.deleteQueuedThrows === true) {
+            throw new Error("already dispatched");
+          }
           deletedQueued.push(args.queuedMessageId);
           return {};
         },
@@ -194,29 +207,36 @@ function createHost(options: HostOptions = {}) {
       },
     },
     environments: {
-      status: async () => ({
-        outcome: "available",
-        workspace: {
-          workingTree: {
-            files: workingTreeFiles.map((file) => ({
-              status: "M",
-              insertions: 1,
-              deletions: 0,
-              ...file,
-            })),
-          },
-          branch: { currentBranch: "bb/feature", defaultBranch: "master" },
-          checkout: { kind: "branch", branchName: "bb/feature", headSha },
-          mergeBase: {
-            files: commits.flatMap((commit) =>
-              commit.paths.map((path) => ({ path, status: "M" })),
-            ),
-            commits: commits.map((commit) => ({ sha: commit.sha })),
-            mergeBaseBranch: "master",
-            baseRef: "abc123",
-          },
-        },
-      }),
+      status: async () =>
+        options.statusUnavailable === true
+          ? { outcome: "unavailable" }
+          : ({
+              outcome: "available",
+              workspace: {
+                workingTree: {
+                  files: workingTreeFiles.map((file) => ({
+                    status: "M",
+                    insertions: 1,
+                    deletions: 0,
+                    ...file,
+                  })),
+                },
+                branch: { currentBranch: "bb/feature", defaultBranch: "master" },
+                checkout: {
+                  kind: options.checkoutKind ?? "branch",
+                  branchName: "bb/feature",
+                  headSha,
+                },
+                mergeBase: {
+                  files: commits.flatMap((commit) =>
+                    commit.paths.map((path) => ({ path, status: "M" })),
+                  ),
+                  commits: commits.map((commit) => ({ sha: commit.sha })),
+                  mergeBaseBranch: "master",
+                  baseRef: "abc123",
+                },
+              },
+          }),
       diffFile: async (args: { path: string }) => {
         const file = workingTreeFiles.find((entry) => entry.path === args.path);
         if (file?.content === undefined) {
@@ -268,6 +288,10 @@ function createHost(options: HostOptions = {}) {
     },
     setSiblingRows: (threadId: string, rows: unknown[]) => {
       siblingRows = { ...siblingRows, [threadId]: rows };
+    },
+    /** Latch a same-provider review on the next timeline read. */
+    armReviewBeforeLock: () => {
+      options.reviewLandsBeforeLock = true;
     },
   };
 }
@@ -648,13 +672,26 @@ describe("auto-review plugin", () => {
   });
 
   it("defers rather than dropping when a same-provider review lands before the firing lock", async () => {
-    const host = createHost({ reviewLandsBeforeLock: true });
+    const host = createHost();
     await plugin(host.bb);
     await emitActive(host);
+    // Armed after thread.active, so the rival latches during evaluate's own
+    // authorship read: after the first in-flight check, before the lock.
+    host.armReviewBeforeLock();
     await emitIdle(host);
     expect(host.sends).toHaveLength(0);
     expect(host.metadata.phase).toBe("deferred");
     expect(host.metadata.turnStart).toMatchObject({ sinceSeq: 100 });
+    expect(await host.bb.storage.kv.list("deferral:")).toEqual([`deferral:${THREAD_ID}`]);
+    // Only the re-check under the provider lock records the decided scope.
+    const status = await host.harness.runCli(["status", THREAD_ID, "--json"]);
+    expect(JSON.parse(status.stdout).lastFire).toMatchObject({
+      outcome: "deferred",
+      reason: "sibling-active",
+      commit: true,
+      merge: true,
+      scopePaths: ["src/a.ts"],
+    });
     await host.harness.dispose();
   });
 
@@ -1122,6 +1159,260 @@ describe("auto-review plugin", () => {
     host.metadata.phase = "awaiting-review";
     const latchedReset = await host.harness.runCli(["reset", THREAD_ID]);
     expect(latchedReset.stdout).toContain("cleared awaiting-review");
+    await host.harness.dispose();
+  });
+
+  async function lastFireOf(host: Host, id: string = THREAD_ID) {
+    const status = await host.harness.runCli(["status", id, "--json"]);
+    return JSON.parse(status.stdout).lastFire as Record<string, unknown> | null;
+  }
+
+  function warnings(host: Host): string[] {
+    return host.harness.logEntries
+      .filter((entry) => entry.level === "warn")
+      .map((entry) => entry.message);
+  }
+
+  it("stands down without a review when the project disabled auto-review", async () => {
+    const host = createHost();
+    await plugin(host.bb);
+    await host.harness.runCli(["disable", "--project", "project-1"]);
+    await emitActive(host);
+    await emitIdle(host);
+    expect(host.sends).toHaveLength(0);
+    expect(host.metadata.phase ?? "idle").toBe("idle");
+    expect(await lastFireOf(host)).toMatchObject({ outcome: "stood-down", reason: "disabled" });
+    await host.harness.dispose();
+  });
+
+  it("follows a global settings change without a reload", async () => {
+    const host = createHost();
+    await plugin(host.bb);
+    await host.harness.setSettings({ enabled: false });
+    await emitActive(host);
+    await emitIdle(host);
+    expect(host.sends).toHaveLength(0);
+    expect(await lastFireOf(host)).toMatchObject({ reason: "disabled" });
+
+    await host.harness.setSettings({ enabled: true, reviewMode: "self" });
+    await emitActive(host);
+    await emitIdle(host);
+    expect(host.sends).toHaveLength(1);
+    expect(promptText(host)).toContain("focused self-review of the diff");
+    expect(promptText(host)).not.toContain("devkit_load_skill");
+    await host.harness.dispose();
+  });
+
+  it("stands down when the workspace status cannot be read", async () => {
+    const host = createHost({ statusUnavailable: true });
+    await plugin(host.bb);
+    await emitActive(host);
+    // No tree snapshot is possible, so the turn start carries the cursor alone.
+    expect(host.metadata.turnStart).toEqual({ sinceSeq: 100, startedAt: expect.any(Number) });
+    await emitIdle(host);
+    expect(host.sends).toHaveLength(0);
+    expect(await lastFireOf(host)).toMatchObject({
+      outcome: "stood-down",
+      reason: "status-unavailable",
+    });
+    await host.harness.dispose();
+  });
+
+  it("stands down on a checkout that is not a branch", async () => {
+    const host = createHost({ checkoutKind: "detached" });
+    await plugin(host.bb);
+    await emitActive(host);
+    await emitIdle(host);
+    expect(host.sends).toHaveLength(0);
+    expect(await lastFireOf(host)).toMatchObject({ reason: "not-a-branch" });
+    await host.harness.dispose();
+  });
+
+  it("ignores turns of threads outside the gate, such as subagents", async () => {
+    const host = createHost();
+    await plugin(host.bb);
+    const subagent = makeThreadResponse({
+      id: THREAD_ID,
+      environmentId: ENV_ID,
+      providerId: "claude-code",
+      parentThreadId: "parent-1",
+    });
+    await host.harness.behavior.emitThreadEvent("thread.active", { thread: subagent });
+    await host.harness.behavior.emitThreadEvent("thread.idle", {
+      thread: subagent,
+      lastAssistantText: null,
+    });
+    expect(host.metadata).toEqual({});
+    expect(host.sends).toHaveLength(0);
+    expect(await lastFireOf(host)).toBeNull();
+    await host.harness.dispose();
+  });
+
+  it("prunes a review index entry whose thread is gone instead of deferring behind it", async () => {
+    const host = createHost({ getThrowsFor: ["ghost"] });
+    await plugin(host.bb);
+    await startReview(host, "ghost");
+    await emitActive(host);
+    await emitIdle(host);
+    expect(host.sends).toHaveLength(1);
+    expect(host.metadata.phase).toBe("awaiting-review");
+    expect(await host.bb.storage.kv.list("review:")).toEqual([`review:${THREAD_ID}`]);
+    await host.harness.dispose();
+  });
+
+  it("prunes a review index entry whose thread no longer holds a review", async () => {
+    const host = createHost();
+    await plugin(host.bb);
+    await startReview(host, SIBLING_ID);
+    endReview(host, SIBLING_ID);
+    await emitActive(host);
+    await emitIdle(host);
+    expect(host.sends).toHaveLength(1);
+    expect(await host.bb.storage.kv.list("review:")).toEqual([`review:${THREAD_ID}`]);
+    await host.harness.dispose();
+  });
+
+  it("leaves a legacy parked entry whose thread is gone to the sweep", async () => {
+    const host = createHost({ getThrowsFor: [SIBLING_ID] });
+    await plugin(host.bb);
+    await park(host, SIBLING_ID, null);
+    const idle = await emitIdle(host, "thread-3");
+    expect(idle.errors).toEqual([]);
+    expect(host.sends).toHaveLength(0);
+    expect(await host.bb.storage.kv.list("deferral:")).toEqual([`deferral:${SIBLING_ID}`]);
+
+    await host.harness.runSchedule("sweep-deferrals");
+    expect(await host.bb.storage.kv.list("deferral:")).toEqual([]);
+    expect(host.metadataFor(SIBLING_ID).phase).toBe("idle");
+    await host.harness.dispose();
+  });
+
+  it("drops a released index entry whose thread already left deferred", async () => {
+    const host = createHost();
+    await plugin(host.bb);
+    await park(host, SIBLING_ID);
+    host.metadataFor(SIBLING_ID).phase = "idle";
+    await emitIdle(host, "thread-3");
+    expect(host.sends).toHaveLength(0);
+    expect(await host.bb.storage.kv.list("deferral:")).toEqual([]);
+    await host.harness.dispose();
+  });
+
+  it("logs and keeps a parked turn a release cannot resolve", async () => {
+    const host = createHost({ getThrowsFor: [SIBLING_ID] });
+    await plugin(host.bb);
+    await park(host, SIBLING_ID);
+    const idle = await emitIdle(host, "thread-3");
+    expect(idle.errors).toEqual([]);
+    expect(host.sends).toHaveLength(0);
+    expect(host.metadataFor(SIBLING_ID).phase).toBe("deferred");
+    expect(await host.bb.storage.kv.list("deferral:")).toEqual([`deferral:${SIBLING_ID}`]);
+    expect(warnings(host)).toContainEqual(
+      expect.stringContaining(`could not release deferred thread ${SIBLING_ID}: thread ${SIBLING_ID} is gone`),
+    );
+    await host.harness.dispose();
+  });
+
+  it("sweeps out, unparked, a parked thread that no longer passes the gate", async () => {
+    const host = createHost({ hiddenThreads: [THREAD_ID] });
+    await plugin(host.bb);
+    await park(host, THREAD_ID);
+    await host.harness.runSchedule("sweep-deferrals");
+    expect(host.sends).toHaveLength(0);
+    expect(host.metadata.phase).toBe("idle");
+    expect(host.metadata.turnStart).toBeUndefined();
+    expect(await host.bb.storage.kv.list("deferral:")).toEqual([]);
+    expect(warnings(host)).toContainEqual(
+      expect.stringContaining("thread no longer passes the auto-review thread gate"),
+    );
+    await host.harness.dispose();
+  });
+
+  it("prunes a swept index entry whose thread already left deferred", async () => {
+    const host = createHost();
+    await plugin(host.bb);
+    await park(host, THREAD_ID);
+    // The state moved on, but the index entry was left behind.
+    host.metadata.phase = "idle";
+    await host.harness.runSchedule("sweep-deferrals");
+    expect(host.sends).toHaveLength(0);
+    expect(await host.bb.storage.kv.list("deferral:")).toEqual([]);
+    await host.harness.dispose();
+  });
+
+  it("ignores the cancel of a queued message that is not its review", async () => {
+    const host = createHost({ sendDelivery: "queued" });
+    await plugin(host.bb);
+    await emitActive(host);
+    await emitIdle(host);
+    expect(host.metadata.phase).toBe("pending-dispatch");
+
+    await host.harness.behavior.emitThreadEvent("message.cancelled", {
+      entry: makeQueueEntry({ id: "qm-other", threadId: THREAD_ID }),
+    });
+    expect(host.metadata.phase).toBe("pending-dispatch");
+    expect(host.metadata.pendingEntryId).toBe("qm-1");
+    expect(await host.bb.storage.kv.list("review:")).toEqual([`review:${THREAD_ID}`]);
+    await host.harness.dispose();
+  });
+
+  it("releases the parked turn when a cancelled review frees its provider", async () => {
+    const host = createHost({ sendDelivery: "queued" });
+    await plugin(host.bb);
+    await emitActive(host);
+    await emitIdle(host);
+    await park(host, SIBLING_ID);
+    host.setSiblingRows(SIBLING_ID, [fileChangeRow("src/a.ts")]);
+
+    await host.harness.behavior.emitThreadEvent("message.cancelled", {
+      entry: queueEntry(),
+    });
+    expect(host.metadata.phase).toBe("idle");
+    expect(host.sends.map((send) => send.threadId)).toEqual([THREAD_ID, SIBLING_ID]);
+    expect(host.metadataFor(SIBLING_ID).phase).toBe("pending-dispatch");
+    await host.harness.dispose();
+  });
+
+  it.each(["thread.archived", "thread.deleted"] as const)(
+    "unlatches a reviewing thread on %s and releases the turn parked behind it",
+    async (event) => {
+      const host = createHost();
+      await plugin(host.bb);
+      await startReview(host, SIBLING_ID);
+      await emitActive(host);
+      await emitIdle(host);
+      expect(host.metadata.phase).toBe("deferred");
+
+      const result = await host.harness.behavior.emitThreadEvent(event, {
+        thread: thread(SIBLING_ID),
+      } as never);
+      expect(result.errors).toEqual([]);
+      expect(host.metadataFor(SIBLING_ID).phase).toBe("idle");
+      expect(host.metadataFor(SIBLING_ID).dispatchedAt).toBeUndefined();
+      expect(host.sends.map((send) => send.threadId)).toEqual([THREAD_ID]);
+      expect(await host.bb.storage.kv.list("review:")).toEqual([`review:${THREAD_ID}`]);
+      await host.harness.dispose();
+    },
+  );
+
+  it("still disarms when the failed deny's queued review cannot be withdrawn", async () => {
+    const host = createHost({
+      sendDelivery: "queued",
+      resolveThrows: true,
+      deleteQueuedThrows: true,
+    });
+    await plugin(host.bb);
+    const { errors } = await emitPlan(host);
+    expect(errors).toEqual([]);
+    expect(host.deletedQueued).toEqual([]);
+    expect(host.metadata.planReviewArmedAt).toBeUndefined();
+    expect(host.metadata.planReviewEntryId).toBeUndefined();
+    expect(warnings(host)).toContainEqual(
+      expect.stringContaining(
+        `could not withdraw the queued plan review qm-1 in ${THREAD_ID}: already dispatched`,
+      ),
+    );
+    expect(await lastFireOf(host)).toMatchObject({ reason: "send-failed" });
     await host.harness.dispose();
   });
 });

@@ -1,0 +1,596 @@
+import { describe, expect, it } from "vitest";
+import {
+  createFakePluginHost,
+  makeThreadResponse,
+  type CreateFakePluginHostOptions,
+} from "@get-bb/plugin-sdk/testing";
+import { registerAutoReviewCli } from "./cli.js";
+import {
+  defineAutoReviewSettings,
+  type GlobalDefaults,
+  type LastFire,
+} from "./config.js";
+
+const THREAD_ID = "thread-1";
+const OTHER_ID = "thread-2";
+const PROJECT_ID = "project-1";
+
+interface CliHostOptions {
+  /** Threads the fake host knows, mapped to their project. */
+  threads?: Record<string, string>;
+  globals?: GlobalDefaults;
+}
+
+function createCliHost(options: CliHostOptions = {}) {
+  const threads = options.threads ?? {
+    [THREAD_ID]: PROJECT_ID,
+    [OTHER_ID]: "project-2",
+  };
+  const metadataByThread = new Map<string, Record<string, unknown>>();
+  const known = (threadId: string): Record<string, unknown> => {
+    if (!(threadId in threads)) {
+      throw new Error(`thread ${threadId} not found`);
+    }
+    let bucket = metadataByThread.get(threadId);
+    if (bucket === undefined) {
+      bucket = {};
+      metadataByThread.set(threadId, bucket);
+    }
+    return bucket;
+  };
+
+  const sdk: CreateFakePluginHostOptions["sdk"] = {
+    threads: {
+      get: async (args: { threadId: string }) => {
+        known(args.threadId);
+        return {
+          ...makeThreadResponse({ id: args.threadId }),
+          projectId: threads[args.threadId] as string,
+        };
+      },
+      getPluginMetadata: async (args: { threadId: string }) => ({
+        ...known(args.threadId),
+      }),
+      updatePluginMetadata: async (args: {
+        threadId: string;
+        set?: Record<string, unknown>;
+        remove?: string[];
+      }) => {
+        const target = known(args.threadId);
+        Object.assign(target, args.set ?? {});
+        for (const key of args.remove ?? []) {
+          delete target[key];
+        }
+        return { ...target };
+      },
+    },
+  };
+
+  const fake = createFakePluginHost({ pluginId: "auto-review", sdk });
+  const settings = defineAutoReviewSettings(fake.bb);
+  let globals: GlobalDefaults = options.globals ?? {
+    enabled: true,
+    mergeEligibleMainlines: ["master"],
+    reviewMode: "auto",
+  };
+  registerAutoReviewCli(fake.bb, settings, () => globals);
+
+  return {
+    ...fake,
+    settings,
+    kv: fake.bb.storage.kv,
+    metadataFor: known,
+    setGlobals: (next: GlobalDefaults) => {
+      globals = next;
+    },
+    run: (argv: string[], threadId?: string) =>
+      fake.harness.runCli(argv, threadId === undefined ? {} : { threadId }),
+  };
+}
+
+type CliHost = ReturnType<typeof createCliHost>;
+
+function parse<T = Record<string, unknown>>(stdout: string | undefined): T {
+  return JSON.parse(stdout ?? "") as T;
+}
+
+function lastFire(overrides: Partial<LastFire> = {}): LastFire {
+  return {
+    at: Date.UTC(2026, 0, 2, 3, 4, 5),
+    outcome: "fired",
+    reason: "fired",
+    commit: true,
+    merge: false,
+    base: "master",
+    isWorktree: true,
+    scopePaths: ["src/a.ts"],
+    ...overrides,
+  };
+}
+
+async function withHost(
+  options: CliHostOptions,
+  body: (host: CliHost) => Promise<void>,
+): Promise<void> {
+  const host = createCliHost(options);
+  try {
+    await body(host);
+  } finally {
+    await host.harness.dispose();
+  }
+}
+
+describe("auto-review cli: dispatch", () => {
+  it("prints usage and exits 2 for an unknown command", async () => {
+    await withHost({}, async (host) => {
+      const result = await host.run(["frobnicate"]);
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("Usage: bb auto-review <status|show|enable");
+      expect(result.stdout).toBe("");
+    });
+  });
+
+  it("prints usage when no command is given", async () => {
+    await withHost({}, async (host) => {
+      const result = await host.run([]);
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("Usage:");
+    });
+  });
+});
+
+describe("auto-review cli: enable / disable", () => {
+  it("defaults to the global scope and flips the global setting", async () => {
+    await withHost({}, async (host) => {
+      const disabled = await host.run(["disable"]);
+      expect(disabled.exitCode).toBe(0);
+      expect(disabled.stdout).toBe("Auto-review disabled globally.\n");
+      expect((await host.settings.get()).enabled).toBe(false);
+
+      const enabled = await host.run(["enable", "--global"]);
+      expect(enabled.stdout).toBe("Auto-review enabled globally.\n");
+      expect((await host.settings.get()).enabled).toBe(true);
+    });
+  });
+
+  it("reports the global change as JSON", async () => {
+    await withHost({}, async (host) => {
+      const result = await host.run(["disable", "--global", "--json"]);
+      expect(result.exitCode).toBe(0);
+      expect(parse(result.stdout)).toEqual({
+        ok: true,
+        scope: "global",
+        enabled: false,
+      });
+    });
+  });
+
+  it("writes a project override without touching the global setting", async () => {
+    await withHost({}, async (host) => {
+      const result = await host.run(["disable", "--project", "project-9"]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("Auto-review disabled for project project-9.\n");
+      expect(await host.kv.get("project:project-9")).toEqual({ enabled: false });
+      expect((await host.settings.get()).enabled).toBe(true);
+
+      const reenabled = await host.run(["enable", "--project", "project-9"]);
+      expect(reenabled.stdout).toBe("Auto-review enabled for project project-9.\n");
+      expect(await host.kv.get("project:project-9")).toEqual({ enabled: true });
+    });
+  });
+
+  it("merges into an existing project override instead of replacing it", async () => {
+    await withHost({}, async (host) => {
+      await host.kv.set("project:project-9", {
+        reviewMode: "self",
+        mergeEligibleMainlines: ["trunk"],
+      });
+      const result = await host.run(["enable", "--project=project-9", "--json"]);
+      expect(parse(result.stdout)).toEqual({
+        ok: true,
+        scope: "project",
+        projectId: "project-9",
+        enabled: true,
+      });
+      expect(await host.kv.get("project:project-9")).toEqual({
+        reviewMode: "self",
+        mergeEligibleMainlines: ["trunk"],
+        enabled: true,
+      });
+    });
+  });
+
+  it("replaces a corrupt project override rather than merging garbage", async () => {
+    await withHost({}, async (host) => {
+      await host.kv.set("project:project-9", { enabled: "yes", reviewMode: 7 });
+      await host.run(["disable", "--project", "project-9"]);
+      expect(await host.kv.get("project:project-9")).toEqual({ enabled: false });
+    });
+  });
+
+  it("resolves a bare --project to the invoking thread's project", async () => {
+    await withHost({}, async (host) => {
+      const result = await host.run(["disable", "--project", "--json"], THREAD_ID);
+      expect(parse(result.stdout)).toMatchObject({
+        scope: "project",
+        projectId: PROJECT_ID,
+      });
+      expect(await host.kv.get(`project:${PROJECT_ID}`)).toEqual({ enabled: false });
+    });
+  });
+
+  it("requires a project id for a bare --project outside a thread", async () => {
+    await withHost({}, async (host) => {
+      const result = await host.run(["enable", "--project"]);
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("A project id is required");
+      expect(await host.kv.list("project:")).toEqual([]);
+    });
+  });
+
+  it("rejects --global together with --project and changes nothing", async () => {
+    await withHost({}, async (host) => {
+      const result = await host.run(["disable", "--project=project-9", "--global"]);
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("Specify only one of --global or --project");
+      expect((await host.settings.get()).enabled).toBe(true);
+      expect(await host.kv.list("project:")).toEqual([]);
+    });
+  });
+});
+
+describe("auto-review cli: skip / unskip", () => {
+  it("sets and clears the per-thread skip flag", async () => {
+    await withHost({}, async (host) => {
+      const skipped = await host.run(["skip", THREAD_ID]);
+      expect(skipped.exitCode).toBe(0);
+      expect(skipped.stdout).toBe(`skip applied to ${THREAD_ID}.\n`);
+      expect(host.metadataFor(THREAD_ID).skip).toBe(true);
+
+      const unskipped = await host.run(["unskip", THREAD_ID, "--json"]);
+      expect(parse(unskipped.stdout)).toEqual({
+        ok: true,
+        command: "unskip",
+        threadId: THREAD_ID,
+      });
+      expect(host.metadataFor(THREAD_ID)).not.toHaveProperty("skip");
+    });
+  });
+
+  it("falls back to the invoking thread when no id is given", async () => {
+    await withHost({}, async (host) => {
+      await host.run(["skip"], OTHER_ID);
+      expect(host.metadataFor(OTHER_ID).skip).toBe(true);
+      expect(host.metadataFor(THREAD_ID)).not.toHaveProperty("skip");
+    });
+  });
+
+  it("prefers the named thread over the invoking one", async () => {
+    await withHost({}, async (host) => {
+      await host.run(["skip", OTHER_ID], THREAD_ID);
+      expect(host.metadataFor(OTHER_ID).skip).toBe(true);
+      expect(host.metadataFor(THREAD_ID)).not.toHaveProperty("skip");
+    });
+  });
+
+  it("requires a thread id outside a thread", async () => {
+    await withHost({}, async (host) => {
+      const result = await host.run(["unskip"]);
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toBe(
+        "A thread id is required: bb auto-review unskip <thread-id>\n",
+      );
+    });
+  });
+
+  it("reports an unknown thread on stderr", async () => {
+    await withHost({}, async (host) => {
+      const result = await host.run(["skip", "ghost"]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toBe("Thread ghost not found or unavailable.\n");
+      expect(result.stdout).toBe("");
+    });
+  });
+
+  it("reports an unknown thread as JSON when asked", async () => {
+    await withHost({}, async (host) => {
+      const result = await host.run(["skip", "ghost", "--json"]);
+      expect(result.exitCode).toBe(1);
+      expect(parse(result.stdout)).toEqual({
+        ok: false,
+        threadId: "ghost",
+        error: "Thread ghost not found or unavailable.",
+      });
+    });
+  });
+});
+
+describe("auto-review cli: reset", () => {
+  it("clears a latch, the skip flag and the plan gate, keeping unrelated keys", async () => {
+    await withHost({}, async (host) => {
+      Object.assign(host.metadataFor(THREAD_ID), {
+        phase: "awaiting-review",
+        turnStart: { sinceSeq: 4 },
+        pendingEntryId: "qm-1",
+        dispatchedAt: 1,
+        skip: true,
+        planReviewArmedAt: 2,
+        planReviewEntryId: "qm-2",
+        unrelated: "kept",
+      });
+      const result = await host.run(["reset", THREAD_ID]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe(`reset ${THREAD_ID} (cleared awaiting-review latch).\n`);
+      expect(host.metadataFor(THREAD_ID)).toEqual({ phase: "idle", unrelated: "kept" });
+    });
+  });
+
+  it("reports an already-idle thread as nothing latched", async () => {
+    await withHost({}, async (host) => {
+      const text = await host.run(["reset", THREAD_ID]);
+      expect(text.stdout).toBe(`reset ${THREAD_ID} (was already idle; nothing latched).\n`);
+
+      const payload = await host.run(["reset", THREAD_ID, "--json"]);
+      expect(parse(payload.stdout)).toEqual({
+        ok: true,
+        command: "reset",
+        threadId: THREAD_ID,
+        priorPhase: "idle",
+        wasLatched: false,
+        droppedDeferral: false,
+      });
+    });
+  });
+
+  it("drops a deferred turn together with its deferral index entry", async () => {
+    await withHost({}, async (host) => {
+      Object.assign(host.metadataFor(THREAD_ID), {
+        phase: "deferred",
+        deferredSince: 5,
+        turnStart: { sinceSeq: 0 },
+      });
+      await host.kv.set(`deferral:${THREAD_ID}`, {
+        threadId: THREAD_ID,
+        projectId: PROJECT_ID,
+        environmentId: "env-1",
+      });
+      await host.kv.set(`deferral:${OTHER_ID}`, {
+        threadId: OTHER_ID,
+        projectId: PROJECT_ID,
+        environmentId: "env-1",
+      });
+
+      const result = await host.run(["reset", THREAD_ID]);
+      expect(result.stdout).toContain(`reset ${THREAD_ID} (dropped a deferred turn).`);
+      expect(result.stdout).toContain("will now never run");
+      expect(host.metadataFor(THREAD_ID)).toEqual({ phase: "idle" });
+      expect(await host.kv.list("deferral:")).toEqual([`deferral:${OTHER_ID}`]);
+    });
+  });
+
+  it("flags the dropped deferral in JSON", async () => {
+    await withHost({}, async (host) => {
+      Object.assign(host.metadataFor(THREAD_ID), { phase: "deferred" });
+      const result = await host.run(["reset", THREAD_ID, "--json"]);
+      expect(parse(result.stdout)).toMatchObject({
+        priorPhase: "deferred",
+        wasLatched: true,
+        droppedDeferral: true,
+      });
+    });
+  });
+
+  it("treats unparseable thread state as idle and still resets it", async () => {
+    await withHost({}, async (host) => {
+      Object.assign(host.metadataFor(THREAD_ID), { phase: "exploded" });
+      const result = await host.run(["reset", THREAD_ID, "--json"]);
+      expect(parse(result.stdout)).toMatchObject({ priorPhase: "idle", wasLatched: false });
+      expect(host.metadataFor(THREAD_ID).phase).toBe("idle");
+      expect(
+        host.harness.logEntries.some((entry) =>
+          entry.message.includes(`unparseable thread state for ${THREAD_ID}`),
+        ),
+      ).toBe(true);
+    });
+  });
+
+  it("resets the thread named after --json, not the invoking thread", async () => {
+    await withHost({}, async (host) => {
+      Object.assign(host.metadataFor(THREAD_ID), { phase: "awaiting-review" });
+      Object.assign(host.metadataFor(OTHER_ID), { phase: "awaiting-review" });
+      const result = await host.run(["reset", "--json", OTHER_ID], THREAD_ID);
+      expect(parse(result.stdout)).toMatchObject({ threadId: OTHER_ID });
+      expect(host.metadataFor(OTHER_ID).phase).toBe("idle");
+      expect(host.metadataFor(THREAD_ID).phase).toBe("awaiting-review");
+    });
+  });
+
+  it("reports an unknown thread instead of throwing", async () => {
+    await withHost({}, async (host) => {
+      const result = await host.run(["reset", "ghost"]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toBe("Thread ghost not found or unavailable.\n");
+    });
+  });
+});
+
+describe("auto-review cli: status", () => {
+  it("requires a thread id outside a thread", async () => {
+    await withHost({}, async (host) => {
+      const result = await host.run(["status", "--json"]);
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain("A thread id is required: bb auto-review status");
+    });
+  });
+
+  it("reports an unknown thread as text and as JSON", async () => {
+    await withHost({}, async (host) => {
+      const text = await host.run(["status", "ghost"]);
+      expect(text.exitCode).toBe(1);
+      expect(text.stderr).toBe("Thread ghost not found or unavailable.\n");
+
+      const payload = await host.run(["status", "ghost", "--json"]);
+      expect(payload.exitCode).toBe(1);
+      expect(parse(payload.stdout)).toMatchObject({ ok: false, threadId: "ghost" });
+    });
+  });
+
+  it("prints the effective state of a fresh thread with no fire yet", async () => {
+    await withHost({}, async (host) => {
+      const result = await host.run(["status"], THREAD_ID);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe(
+        "enabled: true\n" +
+          "skipped: false\n" +
+          "reviewMode: auto\n" +
+          "mergeEligibleMainlines: master\n" +
+          "phase: idle\n" +
+          "lastFire: never\n",
+      );
+    });
+  });
+
+  it("layers the project override and skip flag over the globals", async () => {
+    await withHost(
+      {
+        globals: {
+          enabled: true,
+          mergeEligibleMainlines: ["master", "main"],
+          reviewMode: "devkit",
+        },
+      },
+      async (host) => {
+        await host.kv.set(`project:${PROJECT_ID}`, { enabled: false, reviewMode: "self" });
+        host.metadataFor(THREAD_ID).skip = true;
+        const result = await host.run(["status", THREAD_ID, "--json"]);
+        expect(parse(result.stdout)).toEqual({
+          threadId: THREAD_ID,
+          projectId: PROJECT_ID,
+          enabled: false,
+          skipped: true,
+          reviewMode: "self",
+          mergeEligibleMainlines: ["master", "main"],
+          phase: "idle",
+          deferredSince: null,
+          lastFire: null,
+        });
+      },
+    );
+  });
+
+  it("reads the globals afresh on every call", async () => {
+    await withHost({}, async (host) => {
+      host.setGlobals({ enabled: false, mergeEligibleMainlines: ["trunk"], reviewMode: "self" });
+      const result = await host.run(["status", THREAD_ID]);
+      expect(result.stdout).toContain("enabled: false\n");
+      expect(result.stdout).toContain("mergeEligibleMainlines: trunk\n");
+    });
+  });
+
+  it("describes the last fire of this thread in its own project", async () => {
+    await withHost({}, async (host) => {
+      await host.kv.set(`lastfire:${PROJECT_ID}:${THREAD_ID}`, lastFire({
+        outcome: "stood-down",
+        reason: "no-authorship",
+      }));
+      // Same thread id under another project must not leak in.
+      await host.kv.set(`lastfire:project-2:${THREAD_ID}`, lastFire());
+      const result = await host.run(["status", THREAD_ID]);
+      expect(result.stdout).toContain(
+        "lastFire: stood-down (no-authorship) at 2026-01-02T03:04:05.000Z\n",
+      );
+    });
+  });
+
+  it("ignores a corrupt last-fire record", async () => {
+    await withHost({}, async (host) => {
+      await host.kv.set(`lastfire:${PROJECT_ID}:${THREAD_ID}`, { outcome: "fired" });
+      const result = await host.run(["status", THREAD_ID, "--json"]);
+      expect(parse(result.stdout).lastFire).toBeNull();
+    });
+  });
+
+  it("explains how long a deferred turn has waited and how to drop it", async () => {
+    await withHost({}, async (host) => {
+      const deferredSince = Date.now() - 7 * 60_000 - 5_000;
+      Object.assign(host.metadataFor(THREAD_ID), { phase: "deferred", deferredSince });
+      const text = await host.run(["status", THREAD_ID]);
+      expect(text.stdout).toContain("phase: deferred\ndeferred for: 7 min — ");
+      expect(text.stdout).toContain("It fires automatically as soon as that review ends.");
+      expect(text.stdout).toContain(`To drop it instead: bb auto-review reset ${THREAD_ID}\n`);
+
+      const payload = await host.run(["status", THREAD_ID, "--json"]);
+      expect(parse(payload.stdout)).toMatchObject({ phase: "deferred", deferredSince });
+    });
+  });
+
+  it("omits the wait line for a deferred turn with no timestamp", async () => {
+    await withHost({}, async (host) => {
+      Object.assign(host.metadataFor(THREAD_ID), { phase: "deferred" });
+      const text = await host.run(["status", THREAD_ID]);
+      expect(text.stdout).toContain("phase: deferred\nlastFire: never\n");
+    });
+  });
+
+  it("does not let --json swallow the thread id that follows it", async () => {
+    await withHost({}, async (host) => {
+      const result = await host.run(["status", "--json", OTHER_ID], THREAD_ID);
+      expect(result.exitCode).toBe(0);
+      expect(parse(result.stdout)).toMatchObject({
+        threadId: OTHER_ID,
+        projectId: "project-2",
+      });
+    });
+  });
+});
+
+describe("auto-review cli: show", () => {
+  it("shows the globals when there is no project in scope", async () => {
+    await withHost({}, async (host) => {
+      const text = await host.run(["show"]);
+      expect(text.exitCode).toBe(0);
+      expect(text.stdout).toBe(
+        "project: (none)\n" +
+          "enabled: true\n" +
+          "reviewMode: auto\n" +
+          "mergeEligibleMainlines: master\n",
+      );
+
+      const payload = await host.run(["show", "--json"]);
+      expect(parse(payload.stdout)).toEqual({
+        projectId: null,
+        globals: { enabled: true, mergeEligibleMainlines: ["master"], reviewMode: "auto" },
+        projectOverride: {},
+        effective: { enabled: true, reviewMode: "auto", mergeEligibleMainlines: ["master"] },
+      });
+    });
+  });
+
+  it("merges a named project's override over the globals", async () => {
+    await withHost({}, async (host) => {
+      await host.kv.set("project:project-9", {
+        mergeEligibleMainlines: ["trunk", "personal"],
+        reviewMode: "devkit",
+      });
+      const text = await host.run(["show", "--project", "project-9"]);
+      expect(text.stdout).toBe(
+        "project: project-9\n" +
+          "enabled: true\n" +
+          "reviewMode: devkit\n" +
+          "mergeEligibleMainlines: trunk, personal\n",
+      );
+    });
+  });
+
+  it("resolves the project from the invoking thread", async () => {
+    await withHost({}, async (host) => {
+      await host.kv.set(`project:${PROJECT_ID}`, { enabled: false });
+      const result = await host.run(["show", "--json"], THREAD_ID);
+      expect(parse(result.stdout)).toMatchObject({
+        projectId: PROJECT_ID,
+        projectOverride: { enabled: false },
+        effective: { enabled: false },
+      });
+    });
+  });
+});

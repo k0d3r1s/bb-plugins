@@ -55,6 +55,46 @@ describe("buildReviewPrompt", () => {
     expect(text).toContain("src/a.ts");
   });
 
+  it("never lists an unsafe path, and counts it instead", () => {
+    const text = buildReviewPrompt({
+      decision: { commit: true, merge: false },
+      reviewMode: "auto",
+      scope: renderScope(["src/a.ts", "evil`$(whoami)`.ts", "two words.md"]),
+    });
+    expect(text).not.toContain("whoami");
+    expect(text).not.toContain("two words");
+    expect(text).toContain(
+      "Note: 2 more file(s) you edited have names outside the safe character set",
+    );
+    expect(text).not.toMatch(/beyond the first/);
+  });
+
+  it("notes the files cut from an overlong scope list", () => {
+    const paths = Array.from({ length: MAX_SCOPE_ENTRIES + 3 }, (_, i) => `f${i}.ts`);
+    const text = buildReviewPrompt({
+      decision: { commit: true, merge: false },
+      reviewMode: "auto",
+      scope: renderScope(paths),
+    });
+    expect(text).toContain(`f${MAX_SCOPE_ENTRIES - 1}.ts`);
+    expect(text).not.toContain(`f${MAX_SCOPE_ENTRIES}.ts`);
+    expect(text).toContain(
+      `Note: 3 additional edited file(s) beyond the first ${MAX_SCOPE_ENTRIES} are omitted`,
+    );
+    expect(text).not.toMatch(/outside the safe character set/);
+  });
+
+  it("says none are listed when every path was unsafe", () => {
+    const text = buildReviewPrompt({
+      decision: { commit: true, merge: false },
+      reviewMode: "auto",
+      scope: renderScope(["bad name.ts"]),
+    });
+    expect(text).toContain("(none listed)");
+    expect(text).not.toContain("```text auto-review-scope");
+    expect(text).toContain("Note: 1 more file(s)");
+  });
+
   it("adds the merge step only when the decision merges", () => {
     const withMerge = buildReviewPrompt({
       decision: { commit: true, merge: true },

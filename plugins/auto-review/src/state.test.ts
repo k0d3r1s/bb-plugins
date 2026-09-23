@@ -1,12 +1,37 @@
 import { describe, expect, it } from "vitest";
+import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import {
   isStale,
   planHoldExpired,
+  readState,
   resetToIdlePatch,
   STALE_WINDOW_MS,
   threadStateSchema,
   withThreadLock,
+  writeState,
 } from "./state.js";
+
+function fakeBb(raw: unknown) {
+  const warnings: string[] = [];
+  const updates: unknown[] = [];
+  const bb = {
+    sdk: {
+      threads: {
+        getPluginMetadata: async () => raw,
+        updatePluginMetadata: async (args: unknown) => {
+          updates.push(args);
+          return {};
+        },
+      },
+    },
+    log: {
+      warn: (message: string) => {
+        warnings.push(message);
+      },
+    },
+  } as unknown as BbPluginApi;
+  return { bb, warnings, updates };
+}
 
 describe("threadStateSchema", () => {
   it("defaults phase to idle for an empty namespace", () => {
@@ -112,5 +137,47 @@ describe("withThreadLock", () => {
     await expect(failing).rejects.toThrow("boom");
     const value = await withThreadLock("thread-b", async () => 42);
     expect(value).toBe(42);
+  });
+});
+
+describe("readState", () => {
+  it("returns the parsed state", async () => {
+    const { bb, warnings } = fakeBb({ phase: "deferred", deferredSince: 5 });
+    expect(await readState(bb, "t")).toEqual({ phase: "deferred", deferredSince: 5 });
+    expect(warnings).toEqual([]);
+  });
+
+  it("resets unparseable state to idle and says so", async () => {
+    const { bb, warnings } = fakeBb({ phase: "exploded", skip: "yes" });
+    expect(await readState(bb, "t")).toEqual({ phase: "idle" });
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("discarding unparseable thread state for t");
+  });
+
+  it("falls back to idle silently when there is no metadata object at all", async () => {
+    const { bb, warnings } = fakeBb(null);
+    expect(await readState(bb, "t")).toEqual({ phase: "idle" });
+    expect(warnings).toEqual([]);
+  });
+
+  it("returns a fresh idle object each time, never the shared constant", async () => {
+    const { bb } = fakeBb(null);
+    const first = await readState(bb, "t");
+    first.skip = true;
+    expect(await readState(bb, "t")).toEqual({ phase: "idle" });
+  });
+});
+
+describe("writeState", () => {
+  it("omits the remove list when there is nothing to remove", async () => {
+    const { bb, updates } = fakeBb({});
+    await writeState(bb, "t", { skip: true });
+    expect(updates).toEqual([{ threadId: "t", set: { skip: true } }]);
+  });
+
+  it("forwards the keys to remove", async () => {
+    const { bb, updates } = fakeBb({});
+    await writeState(bb, "t", {}, ["skip"]);
+    expect(updates).toEqual([{ threadId: "t", set: {}, remove: ["skip"] }]);
   });
 });
