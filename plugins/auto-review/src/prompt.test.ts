@@ -20,7 +20,14 @@ describe("renderScope", () => {
     expect(result.overflowCount).toBe(0);
   });
 
-  it("caps the listed paths and reports overflow", () => {
+  it("lists every safe path up to the cap", () => {
+    const paths = Array.from({ length: MAX_SCOPE_ENTRIES }, (_, i) => `f${i}.ts`);
+    const result = renderScope(paths);
+    expect(result.listed).toEqual(paths);
+    expect(result.overflowCount).toBe(0);
+  });
+
+  it("counts paths past the cap as overflow", () => {
     const paths = Array.from({ length: MAX_SCOPE_ENTRIES + 5 }, (_, i) => `f${i}.ts`);
     const result = renderScope(paths);
     expect(result.listed).toHaveLength(MAX_SCOPE_ENTRIES);
@@ -66,22 +73,59 @@ describe("buildReviewPrompt", () => {
     expect(text).toContain(
       "Note: 2 more file(s) you edited have names outside the safe character set",
     );
-    expect(text).not.toMatch(/beyond the first/);
   });
 
-  it("notes the files cut from an overlong scope list", () => {
-    const paths = Array.from({ length: MAX_SCOPE_ENTRIES + 3 }, (_, i) => `f${i}.ts`);
+  it("puts every path of a long scope in the prompt", () => {
+    const paths = Array.from({ length: MAX_SCOPE_ENTRIES }, (_, i) => `f${i}.ts`);
     const text = buildReviewPrompt({
       decision: { commit: true, merge: false },
       reviewMode: "auto",
       scope: renderScope(paths),
     });
-    expect(text).toContain(`f${MAX_SCOPE_ENTRIES - 1}.ts`);
-    expect(text).not.toContain(`f${MAX_SCOPE_ENTRIES}.ts`);
-    expect(text).toContain(
-      `Note: 3 additional edited file(s) beyond the first ${MAX_SCOPE_ENTRIES} are omitted`,
+    for (const path of paths) {
+      expect(text).toContain(`\n${path}\n`);
+    }
+    expect(text).toContain("The complete set of files attributed to your turn");
+    expect(text).not.toMatch(/omitted from this list|beyond the first/);
+    expect(text).toMatch(/6\. Commit the staged changes/u);
+  });
+
+  it("withholds the commit and merge when the scope overflows the cap", () => {
+    const paths = Array.from({ length: MAX_SCOPE_ENTRIES + 3 }, (_, i) => `f${i}.ts`);
+    const text = buildReviewPrompt({
+      decision: { commit: true, merge: true },
+      reviewMode: "auto",
+      scope: renderScope(paths),
+    });
+    expect(text).toContain(`Note: 3 more file(s) beyond the first ${MAX_SCOPE_ENTRIES} are not listed`);
+    expect(text).toMatch(/6\. Do NOT commit\. This turn changed more than/u);
+    expect(text).not.toMatch(/Commit the staged changes/);
+    expect(text).not.toMatch(/Merge the current branch/);
+    expect(text).not.toMatch(/Now judge whether/);
+  });
+
+  it("counts this turn's commits in the completeness check", () => {
+    const text = buildReviewPrompt({
+      decision: { commit: true, merge: false },
+      reviewMode: "auto",
+      scope: renderScope(["src/a.ts"]),
+      committedSince: "0123abcd",
+    });
+    expect(text).toMatch(
+      /4\. Check that what you staged[^\n]*`git diff --cached --name-only` together with this turn's commits \(`git diff --name-only 0123abcd\.\.HEAD`\)/u,
     );
-    expect(text).not.toMatch(/outside the safe character set/);
+  });
+
+  it("gates the commit on a complete, working change", () => {
+    const text = buildReviewPrompt({
+      decision: { commit: true, merge: true },
+      reviewMode: "auto",
+      scope: renderScope(["src/a.ts"]),
+    });
+    expect(text).toMatch(/4\. Check that what you staged is a complete, working change/u);
+    expect(text).toMatch(/6\. Commit the staged changes[^\n]*only if step 4 passed[^\n]*do NOT commit/u);
+    expect(text).toMatch(/7\. Now judge[^\n]*check it is complete and working as in step 4/u);
+    expect(text).toMatch(/8\. Merge the current branch[^\n]*held back a commit in step 6/u);
   });
 
   it("says none are listed when every path was unsafe", () => {
@@ -191,7 +235,7 @@ describe("buildReviewPrompt", () => {
     expect(build("auto")).toContain("Do not amend, squash, reset, or otherwise rewrite");
     expect(build("auto")).not.toContain("(the uncommitted changes)");
     expect(build("auto")).toMatch(
-      /4\. Scan the staged changes[^\n]*Scan this turn's commits too \(`git diff 0123abcd\.\.HEAD`\)[^\n]*do not rewrite history/u,
+      /5\. Scan the staged changes[^\n]*Scan this turn's commits too \(`git diff 0123abcd\.\.HEAD`\)[^\n]*do not rewrite history/u,
     );
   });
 

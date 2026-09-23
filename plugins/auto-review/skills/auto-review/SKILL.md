@@ -10,6 +10,14 @@ the feature branch's changes an agent made during a turn, in a worktree or the p
 checkout alike. It fires on turn end for top-level, git-branch, user coding threads, and
 attributes work only to that thread's own edits.
 
+It commits only a complete, working change. The review turn is given the full list of
+files the turn authored, checks that everything the change depends on is staged with it
+(or already in this turn's own commits), and runs the project's typecheck/build and tests.
+If the work is unfinished, the checks fail, or the change could only be committed in part,
+it does not commit: the changes stay uncommitted and the reply says what is missing. A turn
+that changed more than 400 files is reviewed but never auto-committed or merged, because
+that list is too long to hand over as a reliable commit boundary.
+
 When it commits, the injected turn then judges — from the thread's own plan — whether the
 work is actually finished, and continues any genuinely-remaining planned work (reviewing and
 committing each further step) rather than halting mid-plan. It never invents work: if the
