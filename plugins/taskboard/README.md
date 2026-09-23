@@ -71,7 +71,7 @@ Taskboard is a full-trust BB plugin. Review the source, then install its trackin
 Git release directly from this monorepo:
 
 ```sh
-bb plugin install git:https://github.com/lettland/bb-plugins.git@^0.3.3 --subdirectory plugins/taskboard --tag-prefix taskboard/
+bb plugin install git:https://github.com/lettland/bb-plugins.git@^0.1.0 --subdirectory plugins/taskboard --tag-prefix taskboard/
 ```
 
 Open **Taskboard → Manage**, choose a BB project, select its tracker, and save
