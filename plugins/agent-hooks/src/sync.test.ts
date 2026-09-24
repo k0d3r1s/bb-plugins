@@ -93,7 +93,7 @@ describe("checksums", () => {
   it("tolerates blank lines and surrounding whitespace in CHECKSUMS", () => {
     const dir = signedSource();
     const text = computeChecksums(dir);
-    writeFileSync(path.join(dir, "CHECKSUMS"), `\n  ${text.replace("\n", "\n\n   ")}\n\n`);
+    writeFileSync(path.join(dir, "CHECKSUMS"), `\n  ${text.replaceAll("\n", "\n\n   ")}\n\n`);
     expect(verifyChecksums(dir)).toBe(true);
   });
 
