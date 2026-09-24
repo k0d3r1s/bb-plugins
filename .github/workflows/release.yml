@@ -27,9 +27,8 @@ permissions:
 
 jobs:
   discover:
-    # Pushes made by the GITHUB_TOKEN do not retrigger workflows, so the bot's own
-    # version-bump commit will not loop. This guard is a second net for PAT-based pushes,
-    # and avoids a [skip ci] marker in the commit body.
+    # The bot's version-bump commit carries [skip ci] so no workflow reruns on it.
+    # This guard is a second net in case the marker is ever dropped.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.event.head_commit.committer.name != 'github-actions[bot]'
