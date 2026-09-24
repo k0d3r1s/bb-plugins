@@ -1,4 +1,10 @@
-import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import {
+  existsSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -51,8 +57,11 @@ function globToRegExp(glob: string): RegExp {
   return new RegExp(`^${escaped}$`);
 }
 
-function loadScopes(root: string): Scope[] {
-  const file = path.join(root, "scopes.json");
+function userScopesFile(): string {
+  return path.join(homedir(), ".bb", "dir-skills", "scopes.json");
+}
+
+function parseScopes(file: string): Scope[] {
   const raw = JSON.parse(readFileSync(file, "utf8")) as unknown;
   if (
     !raw ||
@@ -96,6 +105,19 @@ function loadScopes(root: string): Scope[] {
     });
   });
   return scopes;
+}
+
+// The plugin's scopes.json ships neutral defaults; the per-user file keeps
+// private directory names out of the repository. A user scope replaces the
+// shipped scope of the same name and any other user scope is added.
+function loadScopes(root: string): Scope[] {
+  const merged = new Map<string, Scope>();
+  for (const scope of parseScopes(path.join(root, "scopes.json")))
+    merged.set(scope.name, scope);
+  const userFile = userScopesFile();
+  if (existsSync(userFile))
+    for (const scope of parseScopes(userFile)) merged.set(scope.name, scope);
+  return [...merged.values()];
 }
 
 function frontmatterName(skillFile: string): string | null {
@@ -265,6 +287,8 @@ export default async function plugin(bb: BbPluginApi) {
       if (command === "status") {
         const payload = {
           root,
+          userScopesFile: userScopesFile(),
+          userScopesLoaded: existsSync(userScopesFile()),
           scopes: scopes.map((s) => ({
             name: s.name,
             paths: s.paths,
@@ -277,7 +301,12 @@ export default async function plugin(bb: BbPluginApi) {
             exitCode: 0,
             stdout: JSON.stringify(payload, null, 2) + "\n",
           };
-        const lines = [`plugin root: ${root}`, "", "scopes:"];
+        const lines = [
+          `plugin root: ${root}`,
+          `user scopes: ${payload.userScopesFile}${payload.userScopesLoaded ? "" : " (absent)"}`,
+          "",
+          "scopes:",
+        ];
         for (const s of scopes)
           lines.push(
             `  ${s.name}: ${s.paths.join(", ")}  ->  ${s.patternSources.join(", ")}`,

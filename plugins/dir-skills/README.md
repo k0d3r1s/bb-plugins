@@ -33,14 +33,33 @@ skills/<name>/SKILL.md ordinary bb skills (frontmatter: name, description)
   personal environments match by their own path and are unaffected.
 - `*` in a pattern matches any characters. A skill may belong to several scopes.
 
+### Private directories
+
+The shipped `scopes.json` is an example. Keep real directory names out of the
+repository by putting them in `~/.bb/dir-skills/scopes.json`, which uses the
+same format. A scope there replaces the shipped scope with the same `name`;
+other scopes are added. To point the bundled `work-*` skills at your real work
+tree:
+
+```json
+{
+  "scopes": [
+    { "name": "work", "paths": ["~/workspace/<your-org>"], "skills": ["work-*"] }
+  ]
+}
+```
+
+`bb dir-skills status` shows whether the user file was loaded. Keep scoped skill
+names neutral too (`work-<topic>`): the skill name is committed with the skill.
+
 ## Adding a work skill
 
 1. Create `skills/work-<topic>/SKILL.md` with `name: work-<topic>` and a
    `description`. A Claude skill directory works unchanged; copy it in.
-2. Run `bb plugin reload dir-skills`. Threads pick up the new catalog when
-   their provider session is next started.
+2. Run `bb plugin reload dir-skills` (also after editing either scopes file).
+   Threads pick up the new catalog when their provider session is next started.
 3. `bb dir-skills status` lists every skill and its scope. `bb dir-skills check
-   ~/workspace/work/some-repo` shows what a thread there would receive.
+   ~/workspace/<your-org>/some-repo` shows what a thread there would receive.
 4. Each thread start writes a debug log line with the environment path and the
    selected skills: `bb plugin logs dir-skills`.
 
