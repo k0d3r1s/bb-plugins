@@ -17,7 +17,7 @@ skills/<name>/SKILL.md ordinary bb skills (frontmatter: name, description)
 ```json
 {
   "scopes": [
-    { "name": "aerones", "paths": ["~/workspace/aerones"], "skills": ["aerones-*"] }
+    { "name": "work", "paths": ["~/workspace/work"], "skills": ["work-*"] }
   ]
 }
 ```
@@ -35,17 +35,17 @@ skills/<name>/SKILL.md ordinary bb skills (frontmatter: name, description)
 
 ## Adding a work skill
 
-1. Create `skills/aerones-<topic>/SKILL.md` with `name: aerones-<topic>` and a
+1. Create `skills/work-<topic>/SKILL.md` with `name: work-<topic>` and a
    `description`. A Claude skill directory works unchanged; copy it in.
 2. Run `bb plugin reload dir-skills`. Threads pick up the new catalog when
    their provider session is next started.
 3. `bb dir-skills status` lists every skill and its scope. `bb dir-skills check
-   ~/workspace/aerones/some-repo` shows what a thread there would receive.
+   ~/workspace/work/some-repo` shows what a thread there would receive.
 4. Each thread start writes a debug log line with the environment path and the
    selected skills: `bb plugin logs dir-skills`.
 
 Skills land in the agent under bb's plugin-skill namespace, e.g. Claude Code
-sees `bb-global-skills:aerones-conventions`.
+sees `bb-global-skills:work-conventions`.
 
 ## Install
 
