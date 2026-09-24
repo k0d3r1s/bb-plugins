@@ -1,4 +1,4 @@
-import { defineRpcContract } from '@get-bb/plugin-sdk';
+import type { PluginRpcContract } from '@get-bb/plugin-sdk';
 import { z } from 'zod';
 import {
   bbProjectIdSchema,
@@ -295,7 +295,7 @@ const listInputSchema = z
   })
   .strict();
 
-export const taskboardRpcContract = defineRpcContract({
+export const taskboardRpcContract = {
   listProjects: {
     input: z.null(),
     output: z.object({ projects: z.array(trackerProjectSchema) }).strict()
@@ -469,7 +469,7 @@ export const taskboardRpcContract = defineRpcContract({
       })
       .strict()
   }
-});
+} satisfies PluginRpcContract;
 
 export type TaskboardRpcContract = typeof taskboardRpcContract;
 
