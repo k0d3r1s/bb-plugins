@@ -129,6 +129,8 @@ review and commit then never run.
   tree (a new, rewritten or deleted path, or one in a commit the turn made — on a branch or
   straight onto the mainline) changed since the turn started. Edits made through shell commands count. Untracked
   files appearing under `.claude/`, `.codex/` or `.bb/` do not (harness backups and logs).
+  A rebase that replays existing commits with unchanged patches does not count as
+  new work; a changed replayed patch does.
   A turn without a turn-start tree snapshot (e.g. one that started before the plugin was
   updated) is judged by tool edits alone.
 - `empty-scope` — the files it changed are no longer uncommitted, ahead, or in a commit the

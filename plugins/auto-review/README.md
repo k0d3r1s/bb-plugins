@@ -17,6 +17,8 @@ It ships enabled (opt-out).
   snapshot taken at turn start, so shell edits, generators and commits made during the
   turn all count. Files another thread changed, files already dirty and left untouched,
   and harness state under `.claude/`, `.codex/` and `.bb/` are not claimed.
+  Commits replayed by a rebase with the same patches as the turn started with do not
+  count as new work; changed replayed patches still count.
 - Chooses commit and merge from a branch policy keyed on the mainline name. A feature
   branch merges into an eligible mainline; a non-eligible (protected) mainline such as
   `main` is never a merge target, and the primary checkout is never committed to there.

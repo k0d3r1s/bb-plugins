@@ -48,6 +48,8 @@ interface HostOptions {
   /** The checkout is the mainline itself, so nothing is ever ahead of a base. */
   onMainline?: boolean;
   headSha?: string;
+  initialCommits?: TreeCommit[];
+  newestFirstCommits?: boolean;
 }
 
 interface TreeFile {
@@ -62,6 +64,8 @@ interface TreeFile {
 interface TreeCommit {
   sha: string;
   paths: string[];
+  patch?: string;
+  subject?: string;
 }
 
 function fileChangeRow(path: string, sourceSeqStart = 150): unknown {
@@ -85,6 +89,7 @@ function fakeMergeBase(
   startHead: string,
   onMainline: boolean,
   ref: string | undefined,
+  newestFirst = false,
 ) {
   if (onMainline && ref === undefined) {
     return null;
@@ -93,9 +98,15 @@ function fakeMergeBase(
     ref === undefined || ref === startHead
       ? commits
       : commits.slice(commits.findIndex((commit) => commit.sha === ref) + 1);
+  const ordered = newestFirst ? [...since].reverse() : since;
   return {
     files: since.flatMap((commit) => commit.paths.map((path) => ({ path, status: "M" }))),
-    commits: since.map((commit) => ({ sha: commit.sha })),
+    commits: ordered.map((commit) => ({
+      sha: commit.sha,
+      authorName: "author",
+      authoredAt: 1_000,
+      subject: commit.subject ?? commit.paths.join(","),
+    })),
     mergeBaseBranch: ref ?? "master",
     baseRef: "abc123",
   };
@@ -126,7 +137,8 @@ function createHost(options: HostOptions = {}) {
   const startHead = headSha;
   const onMainline = options.onMainline === true;
   const branchName = onMainline ? "master" : "bb/feature";
-  let commits: TreeCommit[] = [];
+  let commits: TreeCommit[] = options.initialCommits ?? [];
+  let allCommits: TreeCommit[] = [...commits];
   let siblingRows: Record<string, unknown[]> = {};
   const worktree = options.worktree ?? true;
   const authoring = options.authoringThreads ?? [THREAD_ID];
@@ -258,7 +270,13 @@ function createHost(options: HostOptions = {}) {
                   branchName,
                   headSha,
                 },
-                mergeBase: fakeMergeBase(commits, startHead, onMainline, args.mergeBaseBranch),
+                mergeBase: fakeMergeBase(
+                  commits,
+                  startHead,
+                  onMainline,
+                  args.mergeBaseBranch,
+                  options.newestFirstCommits,
+                ),
               },
           }),
       diffFile: async (args: { path: string }) => {
@@ -269,12 +287,24 @@ function createHost(options: HostOptions = {}) {
         return { path: args.path, content: file.content, contentEncoding: "utf8", sizeBytes: 0 };
       },
       diffFiles: async (args: { target: string; sha?: string }) => {
-        const commit = commits.find(
+        const commit = allCommits.find(
           (entry) => args.target === "commit" && entry.sha === args.sha,
         );
         return {
           outcome: "available",
+          truncated: false,
           files: (commit?.paths ?? []).map((path) => ({ path, previousPath: null })),
+        };
+      },
+      diffPatch: async (args: { target: { type: string; sha?: string }; paths: string[] }) => {
+        const commit = allCommits.find((entry) => entry.sha === args.target.sha);
+        return {
+          outcome: "available",
+          patches: args.paths.map((path) => ({
+            path,
+            patch: commit?.patch ?? `diff --git a/${path} b/${path}\n-old\n+new\n`,
+            truncated: false,
+          })),
         };
       },
     },
@@ -308,7 +338,13 @@ function createHost(options: HostOptions = {}) {
     },
     commit: (sha: string, paths: string[]) => {
       commits = [...commits, { sha, paths }];
+      allCommits = [...allCommits, { sha, paths }];
       headSha = sha;
+    },
+    rebase: (replayed: TreeCommit[]) => {
+      commits = replayed;
+      allCommits = [...allCommits, ...replayed];
+      headSha = replayed.at(-1)?.sha ?? headSha;
     },
     setSiblingRows: (threadId: string, rows: unknown[]) => {
       siblingRows = { ...siblingRows, [threadId]: rows };
@@ -556,6 +592,121 @@ describe("auto-review plugin", () => {
     expect(await lastFire(host)).toMatchObject({
       outcome: "fired",
       scopePaths: ["src/committed.ts"],
+    });
+    await host.harness.dispose();
+  });
+
+  it("stands down after a clean rebase replayed twelve existing commits", async () => {
+    const originals = Array.from({ length: 12 }, (_, index) => ({
+      sha: `old-${index}`,
+      paths: [`src/file-${index}.ts`],
+    }));
+    const host = createHost({
+      headSha: "old-11",
+      initialCommits: originals,
+      authoredRows: [],
+      workingTreeFiles: [],
+    });
+    await plugin(host.bb);
+    await emitActive(host);
+    host.rebase(originals.map((commit, index) => ({ ...commit, sha: `replayed-${index}` })));
+    await emitIdle(host);
+    expect(host.sends).toHaveLength(0);
+    expect(await lastFire(host)).toMatchObject({ reason: "no-authorship" });
+    await host.harness.dispose();
+  });
+
+  it("stands down when master rebases twelve unchanged commits onto new upstream commits", async () => {
+    const originals = Array.from({ length: 12 }, (_, index) => ({
+      sha: `old-${index}`,
+      paths: [`src/file-${index}.ts`],
+    }));
+    const host = createHost({ onMainline: true, authoredRows: [], workingTreeFiles: [] });
+    for (const commit of originals) {
+      host.commit(commit.sha, commit.paths);
+    }
+    await plugin(host.bb);
+    await emitActive(host);
+    host.rebase([
+      { sha: "upstream-1", paths: ["src/upstream-1.ts"] },
+      { sha: "upstream-2", paths: ["src/upstream-2.ts"] },
+      ...originals.map((commit, index) => ({ ...commit, sha: `replayed-${index}` })),
+    ]);
+    await emitIdle(host);
+    expect(host.sends).toHaveLength(0);
+    expect(await lastFire(host)).toMatchObject({ reason: "no-authorship" });
+    await host.harness.dispose();
+  });
+
+  it("recognizes a clean mainline replay when commit lists are newest first", async () => {
+    const host = createHost({
+      onMainline: true,
+      newestFirstCommits: true,
+      authoredRows: [],
+      workingTreeFiles: [],
+    });
+    host.commit("old", ["src/a.ts"]);
+    await plugin(host.bb);
+    await emitActive(host);
+    host.rebase([
+      { sha: "upstream", paths: ["src/upstream.ts"] },
+      { sha: "replayed", paths: ["src/a.ts"] },
+    ]);
+    await emitIdle(host);
+    expect(host.sends).toHaveLength(0);
+    expect(await lastFire(host)).toMatchObject({ reason: "no-authorship" });
+    await host.harness.dispose();
+  });
+
+  it("reviews a changed replay on master while ignoring new upstream commits", async () => {
+    const host = createHost({ onMainline: true, authoredRows: [], workingTreeFiles: [] });
+    host.commit("old", ["src/a.ts"]);
+    await plugin(host.bb);
+    await emitActive(host);
+    host.rebase([
+      { sha: "upstream", paths: ["src/upstream.ts"] },
+      { sha: "replayed", paths: ["src/a.ts"], patch: "-old\n+resolved\n" },
+    ]);
+    await emitIdle(host);
+    expect(await lastFire(host)).toMatchObject({
+      outcome: "fired",
+      scopePaths: ["src/a.ts"],
+    });
+    await host.harness.dispose();
+  });
+
+  it("reviews a new commit after an unchanged replay on master", async () => {
+    const host = createHost({ onMainline: true, authoredRows: [], workingTreeFiles: [] });
+    host.commit("old", ["src/a.ts"]);
+    await plugin(host.bb);
+    await emitActive(host);
+    host.rebase([
+      { sha: "upstream", paths: ["src/upstream.ts"] },
+      { sha: "replayed", paths: ["src/a.ts"] },
+      { sha: "new", paths: ["src/new.ts"] },
+    ]);
+    await emitIdle(host);
+    expect(await lastFire(host)).toMatchObject({
+      outcome: "fired",
+      scopePaths: ["src/new.ts"],
+    });
+    await host.harness.dispose();
+  });
+
+  it("reviews a patch changed while replaying commits", async () => {
+    const host = createHost({
+      headSha: "old",
+      initialCommits: [{ sha: "old", paths: ["src/a.ts"], patch: "-old\n+new\n" }],
+      authoredRows: [],
+      workingTreeFiles: [],
+    });
+    await plugin(host.bb);
+    await emitActive(host);
+    host.rebase([{ sha: "replayed", paths: ["src/a.ts"], patch: "-old\n+resolved\n" }]);
+    await emitIdle(host);
+    expect(await lastFire(host)).toMatchObject({
+      outcome: "fired",
+      scopePaths: ["src/a.ts"],
     });
     await host.harness.dispose();
   });

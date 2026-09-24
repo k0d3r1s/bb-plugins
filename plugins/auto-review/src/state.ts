@@ -27,6 +27,13 @@ export const treeSnapshotSchema = z.object({
   headSha: z.string().nullable(),
   files: z.record(z.string(), z.string()),
   commits: z.array(z.string()),
+  /** Recent mainline commits, used to recognize unchanged replays after a rebase. */
+  recentCommits: z.array(z.object({
+    sha: z.string(),
+    authorName: z.string(),
+    authoredAt: z.number(),
+    subject: z.string(),
+  })).optional(),
 });
 export type TreeSnapshot = z.infer<typeof treeSnapshotSchema>;
 

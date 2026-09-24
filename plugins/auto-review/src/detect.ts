@@ -229,6 +229,28 @@ export async function snapshotTree(
     HASH_CONCURRENCY,
     (file) => contentHash(bb, environmentId, file),
   );
+  let recentCommits: TreeSnapshot["recentCommits"];
+  if (workspace.mergeBase === null && headShaOf(workspace) !== null) {
+    for (const depth of [20, 10, 5, 1]) {
+      try {
+        const recent = await bb.sdk.environments.status({
+          environmentId,
+          mergeBaseBranch: `HEAD~${depth}`,
+        });
+        if (recent.outcome === "available" && recent.workspace.mergeBase !== null) {
+          recentCommits = recent.workspace.mergeBase.commits.map((commit) => ({
+            sha: commit.sha,
+            authorName: commit.authorName,
+            authoredAt: commit.authoredAt,
+            subject: commit.subject,
+          }));
+          break;
+        }
+      } catch {
+        // A short history may not have this ancestor; try a shallower one.
+      }
+    }
+  }
   return {
     headSha: headShaOf(workspace),
     files: Object.fromEntries(
@@ -238,6 +260,7 @@ export async function snapshotTree(
       ]),
     ),
     commits: workspace.mergeBase?.commits.map((commit) => commit.sha) ?? [],
+    ...(recentCommits === undefined ? {} : { recentCommits }),
   };
 }
 
@@ -281,6 +304,184 @@ async function commitPaths(
   } catch {
     return [];
   }
+}
+
+/** Git changes hunk locations and blob IDs when it replays a patch on a new base. */
+function normalizedPatch(patch: string): string {
+  return patch
+    .replace(/^index [^\n]*\n/gmu, "")
+    .replace(/^@@ [^\n]*@@/gmu, "@@");
+}
+
+/** A missing or truncated patch cannot prove that a replay is unchanged. */
+async function commitPatchFingerprint(
+  bb: BbPluginApi,
+  environmentId: string,
+  sha: string,
+): Promise<string | null> {
+  try {
+    const files = await bb.sdk.environments.diffFiles({
+      environmentId,
+      target: "commit",
+      sha,
+    });
+    if (
+      files.outcome !== "available" ||
+      files.truncated ||
+      files.files.length === 0 ||
+      files.files.some((file) => file.binary)
+    ) {
+      return null;
+    }
+    const patches = await bb.sdk.environments.diffPatch({
+      environmentId,
+      target: { type: "commit", sha },
+      paths: files.files.map((file) => file.path),
+    });
+    if (
+      patches.outcome !== "available" ||
+      patches.patches.length !== files.files.length ||
+      patches.patches.some((patch) => patch.truncated || patch.patch.length === 0)
+    ) {
+      return null;
+    }
+    const normalized = patches.patches
+      .map((patch) => `${patch.path}\n${normalizedPatch(patch.patch)}`)
+      .sort()
+      .join("\n");
+    return createHash("sha256").update(normalized).digest("hex");
+  } catch {
+    return null;
+  }
+}
+
+type RecentCommit = NonNullable<TreeSnapshot["recentCommits"]>[number];
+
+function commitIdentity(commit: RecentCommit): string {
+  return JSON.stringify([commit.authorName, commit.authoredAt, commit.subject]);
+}
+
+interface MainlineReplayInput {
+  bb: BbPluginApi;
+  environmentId: string;
+  before: TreeSnapshot & { recentCommits: RecentCommit[]; headSha: string };
+  commits: readonly string[];
+  startedAt: number;
+  oldFingerprints: readonly (string | null)[];
+  currentFingerprints: readonly (string | null)[];
+}
+
+async function mainlineNovelCommits(input: MainlineReplayInput): Promise<string[]> {
+  const { bb, environmentId, before, commits, startedAt, oldFingerprints, currentFingerprints } = input;
+  let currentMetadata: readonly RecentCommit[];
+  let newestFirst = false;
+  try {
+    const status = await bb.sdk.environments.status({
+      environmentId,
+      mergeBaseBranch: before.headSha,
+    });
+    if (status.outcome !== "available" || status.workspace.mergeBase === null) {
+      return [...commits];
+    }
+    currentMetadata = status.workspace.mergeBase.commits;
+    newestFirst = currentMetadata[0]?.sha === headShaOf(status.workspace);
+  } catch {
+    return [...commits];
+  }
+  const oldByIdentity = new Map<string, Set<string>>();
+  for (const [index, commit] of before.recentCommits.entries()) {
+    const fingerprint = oldFingerprints[index];
+    if (fingerprint === null || fingerprint === undefined) {
+      continue;
+    }
+    const identity = commitIdentity(commit);
+    const known = oldByIdentity.get(identity) ?? new Set<string>();
+    known.add(fingerprint);
+    oldByIdentity.set(identity, known);
+  }
+  const metadata = commits.map((sha) => currentMetadata.find((commit) => commit.sha === sha));
+  const isReplay = (commit: RecentCommit | undefined) =>
+    commit !== undefined && oldByIdentity.has(commitIdentity(commit));
+  const replayBoundary = newestFirst
+    ? metadata.reduce((last, commit, index) => (isReplay(commit) ? index : last), -1)
+    : metadata.findIndex(isReplay);
+  if (replayBoundary < 0) {
+    return [...commits];
+  }
+  return commits.filter((_, index) => {
+    const commit = metadata[index];
+    const fingerprint = currentFingerprints[index];
+    if (commit === undefined || fingerprint === null || fingerprint === undefined) {
+      return true;
+    }
+    const known = oldByIdentity.get(commitIdentity(commit));
+    if (known !== undefined) {
+      return !known.has(fingerprint);
+    }
+    // New base commits precede the replay in history, regardless of API list order.
+    const isBaseCommit = newestFirst ? index > replayBoundary : index < replayBoundary;
+    return !isBaseCommit || commit.authoredAt >= startedAt;
+  });
+}
+
+async function novelCommits(
+  bb: BbPluginApi,
+  environmentId: string,
+  before: TreeSnapshot,
+  commits: readonly string[],
+  startedAt?: number,
+): Promise<string[]> {
+  const originals = before.commits.length > 0
+    ? before.commits
+    : before.recentCommits?.map((commit) => commit.sha) ?? [];
+  if (originals.length === 0 || commits.length === 0) {
+    return [...commits];
+  }
+  if (before.headSha !== null) {
+    try {
+      const ancestry = await bb.sdk.environments.status({
+        environmentId,
+        mergeBaseBranch: before.headSha,
+      });
+      if (
+        ancestry.outcome === "available" &&
+        ancestry.workspace.mergeBase?.baseRef === before.headSha
+      ) {
+        return [...commits];
+      }
+    } catch {
+      // An inaccessible old head cannot prove that this was a fast forward.
+    }
+  }
+  const oldFingerprints = await mapLimit(
+    originals.slice(0, MAX_NEW_COMMITS),
+    HASH_CONCURRENCY,
+    (sha) => commitPatchFingerprint(bb, environmentId, sha),
+  );
+  const currentFingerprints = await mapLimit(commits, HASH_CONCURRENCY, (sha) =>
+    commitPatchFingerprint(bb, environmentId, sha),
+  );
+  if (before.commits.length > 0) {
+    const known = new Set(
+      oldFingerprints.filter((fingerprint): fingerprint is string => fingerprint !== null),
+    );
+    return commits.filter((_, index) => {
+      const fingerprint = currentFingerprints[index];
+      return fingerprint === null || fingerprint === undefined || !known.has(fingerprint);
+    });
+  }
+  if (before.headSha === null || startedAt === undefined || before.recentCommits === undefined) {
+    return [...commits];
+  }
+  return mainlineNovelCommits({
+    bb,
+    environmentId,
+    before: { ...before, headSha: before.headSha, recentCommits: before.recentCommits },
+    commits,
+    startedAt,
+    oldFingerprints,
+    currentFingerprints,
+  });
 }
 
 /**
@@ -337,6 +538,7 @@ export async function treeChangedPaths(
   environmentId: string,
   before: TreeSnapshot,
   workspace: AvailableWorkspace,
+  startedAt?: number,
 ): Promise<TreeChanges> {
   const changed = new Set<string>();
   const recheck: Array<{ file: WorkingTreeFile; prior: string }> = [];
@@ -357,7 +559,13 @@ export async function treeChangedPaths(
     }
   });
 
-  const commits = await turnCommits(bb, environmentId, before, workspace);
+  const commits = await novelCommits(
+    bb,
+    environmentId,
+    before,
+    await turnCommits(bb, environmentId, before, workspace),
+    startedAt,
+  );
   const perCommit = await mapLimit(commits, HASH_CONCURRENCY, (sha) =>
     commitPaths(bb, environmentId, sha),
   );
@@ -499,7 +707,7 @@ export async function turnChangedPaths(
   const harnessOutput = new Set(
     workspace.workingTree.files.filter(isHarnessOutput).map((file) => file.path),
   );
-  const tree = await treeChangedPaths(bb, environmentId, turnStart.tree, workspace);
+  const tree = await treeChangedPaths(bb, environmentId, turnStart.tree, workspace, turnStart.startedAt);
   const unattributed = tree.paths.filter(
     (path) => !ownSet.has(path) && !harnessOutput.has(path),
   );

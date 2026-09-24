@@ -400,6 +400,7 @@ describe("workspace capture edge cases", () => {
     status?: (args?: Record<string, unknown>) => Promise<unknown>;
     diffFile?: (args: { path: string }) => Promise<unknown>;
     diffFiles?: (args: { sha: string }) => Promise<unknown>;
+    diffPatch?: (args: { target: { sha: string } }) => Promise<unknown>;
     timeline?: (args: Record<string, unknown>) => Promise<unknown>;
   }
 
@@ -431,6 +432,8 @@ describe("workspace capture edge cases", () => {
             }
             return env.diffFiles(args);
           },
+          diffPatch: async (args: { target: { sha: string } }) =>
+            env.diffPatch?.(args) ?? { outcome: "unavailable" },
         },
         threads: {
           timeline: async (args: Record<string, unknown>) => {
@@ -619,6 +622,86 @@ describe("workspace capture edge cases", () => {
       expect(changed.paths.sort()).toEqual(["new.ts", "old.ts"]);
     });
 
+    it("does not attribute unchanged patches replayed by a rebase", async () => {
+      const patches: Record<string, string> = {
+        old: "diff --git a/src/a.ts b/src/a.ts\nindex aaa..bbb 100644\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -2,1 +2,1 @@\n-old\n+new\n",
+        replay: "diff --git a/src/a.ts b/src/a.ts\nindex ccc..ddd 100644\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -9,1 +9,1 @@\n-old\n+new\n",
+      };
+      const { bb } = fakeBb({
+        diffFiles: async () => ({
+          outcome: "available",
+          truncated: false,
+          files: [{ path: "src/a.ts", previousPath: null }],
+        }),
+        diffPatch: async ({ target }) => ({
+          outcome: "available",
+          patches: [{ path: "src/a.ts", patch: patches[target.sha], truncated: false }],
+        }),
+      });
+      const changed = await treeChangedPaths(
+        bb,
+        "env",
+        { headSha: "old", files: {}, commits: ["old"] },
+        ws({
+          checkout: { kind: "branch", headSha: "replay" },
+          mergeBase: { files: [], commits: [{ sha: "replay" }] },
+        }),
+      );
+      expect(changed).toEqual({ paths: [], commits: [], committedPaths: [] });
+    });
+
+    it("attributes a replay whose patch changed while resolving a conflict", async () => {
+      const { bb } = fakeBb({
+        diffFiles: async () => ({
+          outcome: "available",
+          truncated: false,
+          files: [{ path: "src/a.ts", previousPath: null }],
+        }),
+        diffPatch: async ({ target }) => ({
+          outcome: "available",
+          patches: [{
+            path: "src/a.ts",
+            patch: target.sha === "old" ? "-before\n+after\n" : "-before\n+different\n",
+            truncated: false,
+          }],
+        }),
+      });
+      const changed = await treeChangedPaths(
+        bb,
+        "env",
+        { headSha: "old", files: {}, commits: ["old"] },
+        ws({
+          checkout: { kind: "branch", headSha: "replay" },
+          mergeBase: { files: [], commits: [{ sha: "replay" }] },
+        }),
+      );
+      expect(changed).toEqual({
+        paths: ["src/a.ts"],
+        commits: ["replay"],
+        committedPaths: ["src/a.ts"],
+      });
+    });
+
+    it("does not use a binary diff to prove a replay is unchanged", async () => {
+      const { bb } = fakeBb({
+        diffFiles: async () => ({
+          outcome: "available",
+          truncated: false,
+          files: [{ path: "asset.bin", previousPath: null, binary: true }],
+        }),
+      });
+      const changed = await treeChangedPaths(
+        bb,
+        "env",
+        { headSha: "old", files: {}, commits: ["old"] },
+        ws({
+          checkout: { kind: "branch", headSha: "replay" },
+          mergeBase: { files: [], commits: [{ sha: "replay" }] },
+        }),
+      );
+      expect(changed.committedPaths).toEqual(["asset.bin"]);
+    });
+
     it("skips a commit it cannot read and still counts the others", async () => {
       const { bb, diffFilesCalls } = fakeBb({
         diffFiles: async ({ sha }) => {
@@ -645,8 +728,8 @@ describe("workspace capture edge cases", () => {
         }),
       );
       expect(changed.paths).toEqual(["good.ts"]);
-      // A commit already ahead at turn start is not the turn's work.
-      expect(diffFilesCalls.sort()).toEqual(["bad", "gone", "good"]);
+      // The old commit is read to compare patch identity, then left unclaimed.
+      expect(diffFilesCalls.sort()).toEqual(["bad", "bad", "gone", "gone", "good", "good", "old"]);
     });
 
     it("reads no commits when the head did not move", async () => {
