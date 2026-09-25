@@ -15,7 +15,6 @@ The root [`.bb/plugins.json`](.bb/plugins.json) collection manifest indexes them
 | [Auto review](plugins/auto-review) | `auto-review` | `@lettland/bb-plugin-auto-review` |
 | [devkit](plugins/devkit) | `devkit` | `@lettland/bb-plugin-devkit` |
 | [Directory skills](plugins/dir-skills) | `dir-skills` | `@lettland/bb-plugin-dir-skills` |
-| [Headroom](plugins/headroom) | `headroom` | `@lettland/bb-plugin-headroom` |
 | [Shared Runtime](plugins/shared-runtime) | `shared-runtime` | `@lettland/bb-plugin-shared-runtime` |
 | [Taskboard](plugins/taskboard) | `taskboard` | `@lettland/bb-plugin-taskboard` |
 
