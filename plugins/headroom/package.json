@@ -4,7 +4,8 @@
   "type": "module",
   "description": "Run a Headroom context-compression proxy with bb and route Claude Code and Codex through it.",
   "engines": {
-    "bb": ">=0.0"
+    "bb": ">=0.0",
+    "bbPluginSdk": ">=0.4.102"
   },
   "bb": {
     "name": "Headroom",

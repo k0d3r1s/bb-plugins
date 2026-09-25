@@ -66,7 +66,8 @@ export type ManagerState =
   | "not-loopback"
   | "adopted"
   | "starting"
-  | "running";
+  | "running"
+  | "exited";
 
 export interface SuperviseDeps {
   spawn: SpawnLike;
@@ -159,6 +160,7 @@ export async function superviseProxy(
     await stopChild(child, exited, deps.killGraceMs ?? 5000);
     return;
   }
+  deps.setState("exited");
   if ((outcome.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
     throw needsConfiguration(
       `Headroom command "${command}" was not found. Install it with \`uv tool install "headroom-ai[all]"\` (or set the command setting to its absolute path), then run \`bb plugin reload headroom\`.`,

@@ -177,6 +177,8 @@ describe("managed proxy", () => {
     await until(() => rig.children.length === 1);
     rig.children[0]?.crash(3);
     await expect(run.done).rejects.toThrow("exited with code 3");
+    const status = JSON.parse((await host.runCli(["status", "--json"])).stdout);
+    expect(status.manager).toEqual({ state: "exited" });
   });
 
   it("restarts on a settings change and stops when management is turned off", async () => {

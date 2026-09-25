@@ -38,7 +38,7 @@ without an Account Pooler token. Older builds ignore the variable and Codex goes
 
 | Key | Default | Meaning |
 |---|---|---|
-| `url` | `http://127.0.0.1:8787` | Proxy root, without `/v1`. |
+| `url` | `http://127.0.0.1:8787` | Proxy root, without `/v1`. A non-loopback `http://` URL sends provider credentials unencrypted to that host; prefer loopback or `https://`. |
 | `manage` | `true` | Start `headroom proxy --host <host> --port <port>` with bb and stop it on disable or shutdown. Only for loopback URLs. A proxy already answering at the URL is reused (re-checked every 30s and replaced if it goes away). |
 | `command` | `headroom` | Executable used to start the proxy; set an absolute path when bb's PATH lacks it. |
 | `claude` | `true` | Route Claude Code threads. |
@@ -50,7 +50,7 @@ A settings change restarts the managed proxy; no reload is needed.
 ## Commands
 
 - `bb headroom status [--json]` — proxy URL, whether it answers, the manager state
-  (`off`, `adopted`, `starting`, `running`, `invalid-url`, `not-loopback`), and which
+  (`off`, `adopted`, `starting`, `running`, `exited`, `invalid-url`, `not-loopback`), and which
   providers are routed.
 
 ## Troubleshooting
