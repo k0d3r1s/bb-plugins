@@ -10,7 +10,7 @@ const USAGE = [
   "Usage: bb devkit <command>",
   "  commands                                           List the ported devkit command workflows",
   "  run <command> [args...]                            Run a command workflow (injects a turn, else prints instructions)",
-  "  review <code | impl <base>..<head> | plan <path>>  Run the calibrated review (injects a turn, else prints instructions)",
+  "  review <code | impl <base>..<head> | plan <path>>  Run the calibrated review (injects a turn, else prints instructions; plan always prints)",
   "  skills list                                        List every devkit skill (slug: description)",
   "  skills find <topic>                                Rank skills relevant to a topic",
   "  skills show <slug>                                 Print one skill body",
@@ -18,6 +18,13 @@ const USAGE = [
 
 const AGENT_NOTE_REVIEW =
   "[devkit review — instructions for a coding agent to run; this prints the workflow, it does not produce the review itself]";
+// A plan review ends at the user's approval, never at implementation.
+const PLAN_STOP = [
+  "Plan scope: edit only the plan document, never any other file, and do not start implementing.",
+  "When the plan is revised, stop and get the user's approval: if you are no longer in plan mode and your provider can re-enter it (Claude Code: EnterPlanMode), re-enter it first,",
+  "then present the revised plan for approval (Claude Code: ExitPlanMode) with a short summary of what the review changed.",
+  "Without a plan-approval tool, end your turn with the revised plan and wait. Implement only after the user explicitly approves.",
+].join("\n");
 const AGENT_NOTE_RUN =
   "[devkit command — instructions for a coding agent to run; devkit_load_skill is an agent tool call, not a shell command]";
 
@@ -27,13 +34,15 @@ function reviewInstruction(mode, target) {
     : mode === "impl"
       ? `the diff for range ${target}`
       : `the plan document at ${target}`;
-  return [
+  const lines = [
     AGENT_NOTE_REVIEW,
     "",
     `Run the devkit calibrated review over ${scope}.`,
     "Load the workflow with devkit_load_skill({ slug: \"review-code\" }) and follow it:",
     "apply the four reviewer lenses, consolidate into Blockers/Concerns/Advisories/Verdict, then disposition.",
-  ].join("\n");
+  ];
+  if (mode === "plan") lines.push("", PLAN_STOP);
+  return lines.join("\n");
 }
 
 /** Inject the instruction as a thread turn when possible, else print it. Never throws. */
@@ -82,6 +91,10 @@ export async function runDevkitCli(argv, deps) {
         }
       }
     }
+    // A plan review is printed, never injected: an injected turn carries the thread's permission
+    // mode, which takes the agent out of plan mode, so its next plan presentation is approved
+    // without ever reaching the user. Printed, the agent follows it in its current turn.
+    if (mode === "plan") return { exitCode: 0, stdout: `${reviewInstruction(mode, target)}\n` };
     return dispatch(
       reviewInstruction(mode, target),
       "Review requested — the coding agent will run it as the next turn in this thread.\n",

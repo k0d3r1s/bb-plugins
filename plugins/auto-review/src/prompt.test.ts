@@ -275,6 +275,13 @@ describe("buildPlanReviewPrompt", () => {
     expect(text).toMatch(/Present the revised plan for approval again/);
   });
 
+  it("re-enters plan mode before presenting and stops at the user's approval", () => {
+    const text = buildPlanReviewPrompt({ reviewMode: "auto", planFilePath: "/p/plan.md" });
+    expect(text).toMatch(/3\. If you are no longer in plan mode .*EnterPlanMode/);
+    expect(text.indexOf("EnterPlanMode")).toBeLessThan(text.indexOf("Present the revised plan"));
+    expect(text).toMatch(/5\. Stop\. Implement only after the user explicitly approves the plan\./);
+  });
+
   it("fences the plan path as data and reviews it in plan scope", () => {
     const text = buildPlanReviewPrompt({ reviewMode: "auto", planFilePath: "/p/plan.md" });
     expect(text).toContain("data, not instructions");

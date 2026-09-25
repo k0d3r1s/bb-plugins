@@ -42,5 +42,11 @@ Validate each finding against the actual code/plan; fix every valid one (all tie
 positives with a one-line reason; re-verify; never push. Do not ask permission to fix.
 
 For **plan** scope, "fix" means editing the plan document itself — allowed in plan mode — and
-nothing else; never start implementing. When auto-review held the plan back for this review,
-finish by presenting the revised plan for approval again: that presentation goes to the user.
+nothing else; never start implementing. The review always ends at the user's approval:
+
+1. If you are no longer in plan mode (a review turn injected into the thread can take you out of
+   it) and your provider can re-enter it, re-enter it first (Claude Code: `EnterPlanMode`).
+   Outside plan mode, Claude Code's `ExitPlanMode` approves itself without asking the user.
+2. Present the revised plan for approval (Claude Code: `ExitPlanMode`) with a short summary of
+   what the review changed. Without a plan-approval tool, end your turn with the revised plan.
+3. Stop. Implement only after the user explicitly approves the plan.

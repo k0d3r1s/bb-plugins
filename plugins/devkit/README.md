@@ -40,7 +40,10 @@ answering from memory.
 | `bb devkit review <code \| impl <base>..<head> \| plan <path>>` | Run the calibrated review over uncommitted changes, a commit range, or a plan file |
 
 `run` and `review` inject a turn into the current thread when invoked from one;
-elsewhere they print the instructions for an agent to follow.
+elsewhere they print the instructions for an agent to follow. `review plan` always prints:
+an injected turn carries the thread's permission mode and takes the agent out of plan mode,
+so its next plan presentation would be approved without reaching the user. A plan review
+ends with the revised plan presented for the user's approval, never with implementation.
 
 ## Install
 

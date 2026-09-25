@@ -131,7 +131,7 @@ export function buildPlanReviewPrompt(input: BuildPlanPromptInput): string {
   const safePath = path !== null && SCOPE_PATH_ALLOW.test(path) ? path : null;
   const lines: string[] = [];
   lines.push(
-    `${AUTO_REVIEW_MARKER} Your plan was held back for review before it reaches the user. Nobody rejected it: auto-review sends every plan through a calibrated review before its first presentation. Do not ask the user what is wrong, and do not start implementing — stay in plan mode. Follow these steps in order.`,
+    `${AUTO_REVIEW_MARKER} Your plan was held back for review before it reaches the user. Nobody rejected it: auto-review sends every plan through a calibrated review before its first presentation. Do not ask the user what is wrong, and do not start implementing: this turn may have taken you out of plan mode, and that is not approval. Follow these steps in order.`,
   );
   lines.push("");
   if (safePath !== null) {
@@ -149,7 +149,13 @@ export function buildPlanReviewPrompt(input: BuildPlanPromptInput): string {
     "2. Apply every valid finding directly to the plan document, whatever its severity; skip a false positive with a one-line reason. Editing the plan document is allowed in plan mode — do not edit any other file.",
   );
   lines.push(
-    "3. Present the revised plan for approval again, the same way you did before (for example ExitPlanMode). That presentation goes straight to the user, so include a short summary of what the review changed.",
+    "3. If you are no longer in plan mode and your provider can re-enter it (Claude Code: EnterPlanMode), re-enter it first: outside plan mode, Claude Code's ExitPlanMode approves itself without asking the user.",
+  );
+  lines.push(
+    "4. Present the revised plan for approval again, the same way you did before (for example ExitPlanMode). That presentation goes straight to the user, so include a short summary of what the review changed. Without a plan-approval tool, end your turn with the revised plan.",
+  );
+  lines.push(
+    "5. Stop. Implement only after the user explicitly approves the plan.",
   );
   return lines.join("\n");
 }

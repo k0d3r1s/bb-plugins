@@ -147,6 +147,25 @@ describe("runDevkitCli", () => {
     expect(runInjected.stdout).toContain("requested");
   });
 
+  it("review plan always prints, never injects, and ends at the user's approval", async () => {
+    let injected = false;
+    const r = await runDevkitCli(["review", "plan", "docs/p.md"], {
+      ...deps(),
+      injectInstruction: async () => {
+        injected = true;
+        return true;
+      },
+    });
+    expect(injected).toBe(false);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain("the plan document at docs/p.md");
+    expect(r.stdout).toContain("do not start implementing");
+    expect(r.stdout).toContain("EnterPlanMode");
+    expect(r.stdout).toContain("Implement only after the user explicitly approves.");
+    const code = await runDevkitCli(["review", "code"], deps());
+    expect(code.stdout).not.toContain("EnterPlanMode");
+  });
+
   it("falls back to printing when injectInstruction throws", async () => {
     const r = await runDevkitCli(["review", "code"], { ...deps(), injectInstruction: async () => { throw new Error("thread busy"); } });
     expect(r.exitCode).toBe(0);

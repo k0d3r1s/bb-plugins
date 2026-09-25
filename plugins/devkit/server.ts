@@ -172,7 +172,7 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
     commands: [
       { name: "commands", summary: "List the ported devkit command workflows", usage: "bb devkit commands" },
       { name: "run", summary: "Run a command workflow (injects a turn in-thread, else prints instructions)", usage: "bb devkit run <command> [args...]" },
-      { name: "review", summary: "Run the calibrated review (injects a review turn in-thread, else prints instructions)", usage: "bb devkit review <code|impl <base>..<head>|plan <path>>" },
+      { name: "review", summary: "Run the calibrated review (injects a review turn in-thread, else prints instructions; a plan review always prints)", usage: "bb devkit review <code|impl <base>..<head>|plan <path>>" },
       { name: "skills", summary: "Browse the skill library", usage: "bb devkit skills <list|find <topic>|show <slug>>" },
     ],
     run: (argv, ctx) =>

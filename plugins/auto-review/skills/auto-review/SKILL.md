@@ -33,7 +33,10 @@ A plan gets reviewed before the user sees it. When an agent presents a plan for 
 presentation. It queues a review turn and then denies that approval, so the
 agent gets the reason along with the deny rather than reading it as a rejection. The agent
 reviews the plan file (devkit's calibrated review in `plan` scope, or a self-review, per the
-review mode), applies every valid finding to the plan, and presents it again. That second
+review mode), applies every valid finding to the plan, and presents it again. The review turn
+carries the thread's permission mode and can take the agent out of plan mode, where Claude
+Code's ExitPlanMode would approve itself, so the agent re-enters plan mode (EnterPlanMode)
+before presenting and then stops until the user approves. That second
 presentation goes straight to the user and resets the gate for the thread's next plan. A
 re-presentation that arrives before the review turn has been delivered is denied again,
 so the user never gets an unreviewed plan — but only while that review is actually still in

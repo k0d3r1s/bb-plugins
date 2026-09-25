@@ -91,7 +91,10 @@ SHORT="agent-hooks: plan not yet reviewed — run bb devkit review plan on the p
 CONTEXT="agent-hooks: this plan has not been reviewed. Before presenting it: if the plan is not already saved \
 to a file, save it (e.g. docs/plans/<name>.md); then run bb devkit review plan <path-to-that-plan-file> — \
 pass the path explicitly. Let the 4 calibrated reviewers run, apply their findings to the plan, then \
-call ExitPlanMode again to present the improved plan; the re-presentation passes through automatically. \
+call ExitPlanMode again to present the improved plan; the re-presentation passes this gate and goes to the \
+user for approval. Edit only the plan file and do not implement anything until the user approves. If you \
+are no longer in plan mode (for example an injected turn took you out of it), call EnterPlanMode first: \
+outside plan mode ExitPlanMode approves itself without asking the user. \
 Note: this is a 4-reviewer pass (tokens + latency). The gate can only be disabled by launching Claude \
 with AGENT_HOOKS_SKIP_PLAN_REVIEW=1 in the environment — it cannot be toggled from inside a running session."
 
