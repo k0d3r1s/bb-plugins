@@ -1,6 +1,6 @@
 {
   "name": "@lettland/bb-plugin-headroom",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "Run a Headroom context-compression proxy with bb and route Claude Code and Codex through it.",
   "engines": {
