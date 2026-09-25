@@ -139,6 +139,9 @@ review and commit then never run.
 - `empty-scope` — the files it changed are no longer uncommitted, ahead, or in a commit the
   turn made (e.g. reverted).
 - `no-turn-start` — no turn-start cursor was recorded (a missed start event); stood down, fail-safe.
+- `user-stopped` — the user stopped the thread during the turn; stood down, so a manual stop
+  never triggers a review, commit or merge. A stop bb made on its own (daemon restart,
+  provider-turn watchdog) does not count.
 - `disabled` — disabled globally or for this project.
 - `skipped` — this thread has a skip flag set.
 Outcomes are `fired`, `deferred` (parked, will still run) and `stood-down` (will not run).

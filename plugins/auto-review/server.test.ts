@@ -52,6 +52,11 @@ interface HostOptions {
   newestFirstCommits?: boolean;
 }
 
+interface InterruptEvent {
+  seq: number;
+  reason: "manual-stop" | "host-daemon-restarted" | "provider-turn-idle";
+}
+
 interface TreeFile {
   path: string;
   status?: string;
@@ -147,6 +152,7 @@ function createHost(options: HostOptions = {}) {
   ];
   let maxSeq = 100;
   let queuedRows = options.queuedRows ?? [];
+  let interrupts: InterruptEvent[] = [];
 
   const sdk: CreateFakePluginHostOptions["sdk"] = {
     threads: {
@@ -204,6 +210,23 @@ function createHost(options: HostOptions = {}) {
             olderRowsSourceSeqEnd: null,
           },
         };
+      },
+      events: {
+        list: async (args: { threadId: string; afterSeq?: string; types?: readonly string[] }) =>
+          args.threadId === THREAD_ID &&
+          args.types?.includes("system/thread/interrupted") === true
+            ? interrupts
+                .filter((event) => event.seq > Number(args.afterSeq ?? -1))
+                .map((event) => ({
+                  id: `ev-${event.seq}`,
+                  scope: { kind: "thread" },
+                  threadId: THREAD_ID,
+                  seq: event.seq,
+                  createdAt: 1_000,
+                  type: "system/thread/interrupted",
+                  data: { reason: event.reason },
+                }))
+            : [],
       },
       list: async () => {
         return [
@@ -328,6 +351,10 @@ function createHost(options: HostOptions = {}) {
     },
     setMaxSeq: (next: number) => {
       maxSeq = next;
+    },
+    /** Record a `system/thread/interrupted` event on the thread. */
+    interrupt: (event: InterruptEvent) => {
+      interrupts = [...interrupts, event];
     },
     setQueuedRows: (next: Array<{ id: string }>) => {
       queuedRows = next;
@@ -567,6 +594,55 @@ describe("auto-review plugin", () => {
       outcome: "fired",
       scopePaths: ["src/a.ts"],
     });
+    await host.harness.dispose();
+  });
+
+  it("stands down when the user stopped the turn", async () => {
+    const host = createHost();
+    await plugin(host.bb);
+    await emitActive(host);
+    host.interrupt({ seq: 120, reason: "manual-stop" });
+    await emitIdle(host);
+    expect(host.sends).toHaveLength(0);
+    expect(await lastFire(host)).toMatchObject({
+      outcome: "stood-down",
+      reason: "user-stopped",
+    });
+    await host.harness.dispose();
+  });
+
+  it("reviews a turn after an earlier turn was stopped", async () => {
+    const host = createHost();
+    await plugin(host.bb);
+    host.interrupt({ seq: 90, reason: "manual-stop" });
+    await emitActive(host);
+    await emitIdle(host);
+    expect(await lastFire(host)).toMatchObject({ outcome: "fired" });
+    await host.harness.dispose();
+  });
+
+  it("reviews a turn bb stopped on its own", async () => {
+    const host = createHost();
+    await plugin(host.bb);
+    await emitActive(host);
+    host.interrupt({ seq: 120, reason: "host-daemon-restarted" });
+    host.interrupt({ seq: 130, reason: "provider-turn-idle" });
+    await emitIdle(host);
+    expect(await lastFire(host)).toMatchObject({ outcome: "fired" });
+    await host.harness.dispose();
+  });
+
+  it("unparks a deferred turn when the user stops the thread's next turn", async () => {
+    const host = createHost();
+    await plugin(host.bb);
+    await park(host, THREAD_ID);
+    await emitActive(host);
+    host.interrupt({ seq: 120, reason: "manual-stop" });
+    await emitIdle(host);
+    expect(host.sends).toHaveLength(0);
+    expect(host.metadata.phase).toBe("idle");
+    expect(await host.bb.storage.kv.list("deferral:")).toEqual([]);
+    expect(await lastFire(host)).toMatchObject({ reason: "user-stopped" });
     await host.harness.dispose();
   });
 

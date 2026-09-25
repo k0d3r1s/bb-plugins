@@ -31,6 +31,28 @@ export async function captureSinceSeq(
   return timeline.maxSeq;
 }
 
+/**
+ * Whether the user stopped the thread after the turn-start cursor. A stop the
+ * thread took for any other reason — a daemon restart, the provider-turn
+ * watchdog — was not the user's call and does not count.
+ */
+export async function stoppedByUser(
+  bb: BbPluginApi,
+  threadId: string,
+  sinceSeq: number,
+): Promise<boolean> {
+  const events = await bb.sdk.threads.events.list({
+    threadId,
+    afterSeq: String(sinceSeq),
+    types: ["system/thread/interrupted"],
+  });
+  return events.some(
+    (event) =>
+      event.type === "system/thread/interrupted" &&
+      event.data.reason === "manual-stop",
+  );
+}
+
 function nestedRows(row: TimelineRow): readonly TimelineRow[] {
   if ("childRows" in row && Array.isArray(row.childRows)) {
     return row.childRows;

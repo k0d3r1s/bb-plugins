@@ -25,6 +25,7 @@ import {
   fetchWorkspace,
   isBranchCheckout,
   mainlineBase,
+  stoppedByUser,
   turnChangedPaths,
 } from "./src/detect.js";
 import {
@@ -265,6 +266,12 @@ export default async function plugin(bb: BbPluginApi) {
     }
     if (state.turnStart === undefined) {
       await standDown(thread, state, "no-turn-start");
+      return;
+    }
+    // The user stopped this turn to take over; reviewing and committing
+    // half-done work behind their back is the last thing they asked for.
+    if (await stoppedByUser(bb, thread.id, state.turnStart.sinceSeq)) {
+      await standDown(thread, state, "user-stopped");
       return;
     }
     const environmentId = thread.environmentId;

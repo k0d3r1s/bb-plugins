@@ -12,6 +12,7 @@ export const FIRE_REASONS = [
   "no-authorship",
   "empty-scope",
   "no-turn-start",
+  "user-stopped",
   "disabled",
   "skipped",
   "sibling-active",
