@@ -140,7 +140,8 @@ review and commit then never run.
   turn made (e.g. reverted).
 - `no-turn-start` — no turn-start cursor was recorded (a missed start event); stood down, fail-safe.
 - `user-stopped` — the user stopped the thread during the turn; stood down, so a manual stop
-  never triggers a review, commit or merge. A stop bb made on its own (daemon restart,
+  never triggers a review, commit or merge. A turn of this thread that was parked
+  (`deferred`) is dropped as well. A stop bb made on its own (daemon restart,
   provider-turn watchdog) does not count.
 - `disabled` — disabled globally or for this project.
 - `skipped` — this thread has a skip flag set.
